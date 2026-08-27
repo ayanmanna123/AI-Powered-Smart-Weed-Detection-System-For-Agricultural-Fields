@@ -1,0 +1,24 @@
+# Datasets and Data
+/archive/
+/yolo_dataset/
+*.zip
+*.tar.gz
+
+# Trained Models and Logs
+/models/
+/runs/
+*.pt
+*.pth
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE and Environment
+.env
+.venv/
+env/
+venv/
+.vscode/
+.idea/
