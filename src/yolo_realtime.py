@@ -3,6 +3,8 @@ import time
 from ultralytics import YOLO
 import os
 
+from detection_output import format_detection
+
 def main():
     model_path = 'runs/detect/yolov8_weed_crop/weights/best.pt'
     
@@ -53,6 +55,8 @@ def main():
                 # Bounding box coordinates
                 x1, y1, x2, y2 = box.xyxy[0]
                 x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                width = x2 - x1
+                height = y2 - y1
                 
                 # Confidence and Class
                 conf = box.conf[0]
@@ -76,8 +80,8 @@ def main():
                 # Draw Center Crosshair
                 cv2.drawMarker(frame, (center_x, center_y), color, markerType=cv2.MARKER_CROSS, markerSize=10, thickness=1)
                 
-                # Print coordinates to console for the robot
-                print(f"Detected: {cls_name} ({conf:.2f}) | Center: X={center_x}, Y={center_y}")
+                # Print coordinates and bounding-box size to console for the robot
+                print(format_detection(cls_name, float(conf), center_x, center_y, width, height))
 
         # Display FPS and Latency on the frame
         cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
