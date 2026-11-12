@@ -44,3 +44,29 @@ python src/yolo_realtime.py
 * **Bounding Boxes:** Draws boxes around detected weeds (Red) and crops (Green).
 * **Targeting System:** Calculates the `(X, Y)` center coordinate of each bounding box. This center coordinate is printed to the terminal and drawn as a crosshair, which the robot can use to aim the pesticide sprayer precisely at the weed, avoiding the crop.
 * Press `q` to quit the camera window.
+
+### 5. Phone Camera Detection (WiFi Streaming)
+Use your phone's camera to detect weeds in the field — no USB webcam needed. The server runs YOLOv8 on your PC and streams annotated results back to your phone in real-time.
+
+**Requirements:** Both your PC and phone must be on the **same WiFi network**.
+
+```bash
+pip install flask-socketio cryptography
+python src/phone_stream_server.py
+```
+
+1. The terminal will display a secure URL like `https://192.168.x.x:5000`
+2. Open that URL on your phone's browser (Chrome / Safari)
+3. Since the server uses an automatic self-signed SSL certificate, tap **Advanced** / **Details** &rarr; **Proceed to ... (unsafe)** to open the page (required by mobile browsers to access the camera)
+4. Grant camera permission when prompted
+5. Tap **▶ Start Detection** — your phone camera feed is sent to the PC for YOLO inference
+6. Annotated frames with bounding boxes, crosshairs, and detection stats are displayed on your phone
+
+> **Alternative (Plain HTTP):** Run `python src/phone_stream_server.py --http`. To allow camera over plain HTTP in Chrome on Android, visit `chrome://flags/#unsafely-treat-insecure-origin-as-secure`, enable the flag, add `http://<your-ip>:5000`, and tap Relaunch.
+
+
+**Features:**
+* Switch between rear and front camera
+* Real-time FPS, latency, and detection count stats
+* Detection log showing class, confidence, center coordinates, and bounding box size
+* Same targeting output printed to the server terminal (compatible with robot controller)

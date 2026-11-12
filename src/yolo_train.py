@@ -1,7 +1,7 @@
 from ultralytics import YOLO
 import os
 
-def train_yolo(epochs=5):
+def train_yolo(epochs=560):
     print("Initializing YOLOv8n model...")
     # Load a pretrained YOLOv8n model
     model = YOLO('yolov8n.pt') 
@@ -25,4 +25,4 @@ def train_yolo(epochs=5):
     print("The best weights are saved in: runs/detect/yolov8_weed_crop/weights/best.pt")
     
 if __name__ == '__main__':
-    train_yolo(epochs=5) # Reduced for quick verification, user can change this
+    train_yolo(epochs=560) # Reduced for quick verification, user can change this

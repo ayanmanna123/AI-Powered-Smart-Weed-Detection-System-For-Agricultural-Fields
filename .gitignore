@@ -22,3 +22,10 @@ env/
 venv/
 .vscode/
 .idea/
+
+# SSL Certificates
+certs/
+*.crt
+*.key
+*.pem
+
