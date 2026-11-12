@@ -969,11 +969,11 @@ function executeManeuver(move) {
     case 'R':  // Spin/Tank Right: Left (M4,M2) Forward, Right (M3,M1) Reverse
       sendDriveBatch(spd, 'F', spd, 'R', 'SPIN RIGHT', '&#8635;');
       break;
-    case 'FL': // Curve Forward-Left: Left slower Forward, Right full Forward
-      sendDriveBatch(innerSpd, 'F', spd, 'F', 'CURVE FL', '&#8598;');
+    case 'FL': // Curve Forward-Left (swapped: Left full Forward, Right slower Forward)
+      sendDriveBatch(spd, 'F', innerSpd, 'F', 'CURVE FL', '&#8598;');
       break;
-    case 'FR': // Curve Forward-Right: Left full Forward, Right slower Forward
-      sendDriveBatch(spd, 'F', innerSpd, 'F', 'CURVE FR', '&#8599;');
+    case 'FR': // Curve Forward-Right (swapped: Left slower Forward, Right full Forward)
+      sendDriveBatch(innerSpd, 'F', spd, 'F', 'CURVE FR', '&#8599;');
       break;
     case 'BL': // Curve Back-Left: Left slower Reverse, Right full Reverse
       sendDriveBatch(innerSpd, 'R', spd, 'R', 'CURVE BL', '&#8601;');
@@ -1187,8 +1187,9 @@ function handleJoyMove(clientX, clientY) {
     return;
   }
 
-  let leftVal = (normY + normX) * masterSpeed;
-  let rightVal = (normY - normX) * masterSpeed;
+  const steerX = normY >= 0 ? -normX : normX;
+  let leftVal = (normY + steerX) * masterSpeed;
+  let rightVal = (normY - steerX) * masterSpeed;
 
   leftVal = Math.max(-masterSpeed, Math.min(masterSpeed, leftVal));
   rightVal = Math.max(-masterSpeed, Math.min(masterSpeed, rightVal));
