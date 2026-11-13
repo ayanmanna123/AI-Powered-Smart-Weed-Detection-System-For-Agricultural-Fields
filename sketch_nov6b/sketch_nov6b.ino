@@ -571,6 +571,71 @@ const char webpage[] PROGMEM = R"rawliteral(
     font-size: 0.72rem;
     color: #e2e8f0;
   }
+
+  /* Auto Drive (Distance / Time) Section */
+  .auto-drive-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 12px;
+    align-items: end;
+  }
+  .field-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .field-group label {
+    font-size: 0.78rem;
+    font-weight: 700;
+    color: #cbd5e1;
+  }
+  .field-input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: #111827;
+    color: var(--text);
+    font-size: 0.9rem;
+    font-weight: 600;
+    outline: none;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+  .field-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 10px var(--accent-glow);
+  }
+  .submit-run-btn {
+    width: 100%;
+    padding: 11px 16px;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: white;
+    font-size: 0.9rem;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    box-shadow: 0 4px 15px rgba(16, 185, 129, 0.35);
+    transition: transform 0.1s, opacity 0.2s;
+  }
+  .submit-run-btn:active {
+    transform: scale(0.97);
+  }
+  .auto-status {
+    margin-top: 10px;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    font-size: 0.82rem;
+    color: var(--accent);
+    font-weight: 600;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
 </style>
 </head>
 <body>
@@ -744,6 +809,38 @@ const char webpage[] PROGMEM = R"rawliteral(
       </div>
     </div>
 
+  </div>
+
+  <!-- Auto Drive by Distance or Time Panel -->
+  <div class="panel" style="margin-top: 14px;">
+    <div class="panel-header">
+      <span class="panel-title">Auto Drive (Distance or Time)</span>
+      <span style="font-size:0.75rem;color:var(--muted);">Enter either Distance OR Time &bull; Rate: 10 cm = 2 sec</span>
+    </div>
+    <div class="auto-drive-grid">
+      <div class="field-group">
+        <label for="inputDistance">1. Distance (cm)</label>
+        <input type="number" id="inputDistance" class="field-input" placeholder="e.g. 10" min="0" step="any" oninput="onDistanceInput()">
+      </div>
+      <div class="field-group">
+        <label for="inputTime">2. Time (sec)</label>
+        <input type="number" id="inputTime" class="field-input" placeholder="e.g. 2" min="0" step="any" oninput="onTimeInput()">
+      </div>
+      <div class="field-group">
+        <label for="inputDirection">Direction</label>
+        <select id="inputDirection" class="field-input">
+          <option value="F">Forward</option>
+          <option value="B">Backward</option>
+        </select>
+      </div>
+      <div class="field-group">
+        <button class="submit-run-btn" id="autoRunBtn" onclick="runAutoDrive()">&#9654; SUBMIT &amp; RUN</button>
+      </div>
+    </div>
+    <div class="auto-status" id="autoDriveStatus">
+      <span id="autoStatusText">Ready: Enter distance (cm) or time (sec) and click Submit</span>
+      <span id="autoCalcBadge" style="color:var(--muted);font-size:0.76rem;">10 cm = 2.0 s (5 cm/s)</span>
+    </div>
   </div>
 
   <!-- Bottom Panel: Individual Motor Diagnostics -->
@@ -984,7 +1081,109 @@ function executeManeuver(move) {
   }
 }
 
+// Auto Drive (Distance / Time) state: 2 sec = 10 cm (0.2 sec per cm, 5 cm per sec)
+let autoDriveTimer = null;
+let autoDriveInterval = null;
+
+function clearAutoDriveTimers(resetStatusText = false) {
+  if (autoDriveTimer) {
+    clearTimeout(autoDriveTimer);
+    autoDriveTimer = null;
+  }
+  if (autoDriveInterval) {
+    clearInterval(autoDriveInterval);
+    autoDriveInterval = null;
+  }
+  if (resetStatusText) {
+    const st = document.getElementById('autoStatusText');
+    if (st) st.innerText = 'Stopped';
+  }
+}
+
+function onDistanceInput() {
+  const distVal = document.getElementById('inputDistance').value;
+  if (distVal !== '') {
+    document.getElementById('inputTime').value = '';
+    const d = parseFloat(distVal);
+    if (!isNaN(d) && d > 0) {
+      const calcSec = (d * 0.2).toFixed(2);
+      document.getElementById('autoCalcBadge').innerText = `${d} cm → ${calcSec} sec`;
+    }
+  } else {
+    document.getElementById('autoCalcBadge').innerText = '10 cm = 2.0 s (5 cm/s)';
+  }
+}
+
+function onTimeInput() {
+  const timeVal = document.getElementById('inputTime').value;
+  if (timeVal !== '') {
+    document.getElementById('inputDistance').value = '';
+    const t = parseFloat(timeVal);
+    if (!isNaN(t) && t > 0) {
+      const calcCm = (t * 5).toFixed(1);
+      document.getElementById('autoCalcBadge').innerText = `${t} sec → ${calcCm} cm`;
+    }
+  } else {
+    document.getElementById('autoCalcBadge').innerText = '10 cm = 2.0 s (5 cm/s)';
+  }
+}
+
+function runAutoDrive() {
+  const distStr = document.getElementById('inputDistance').value.trim();
+  const timeStr = document.getElementById('inputTime').value.trim();
+  const dir = document.getElementById('inputDirection').value; // 'F' or 'B'
+  const statusEl = document.getElementById('autoStatusText');
+
+  let durationSec = 0;
+  let summaryDesc = '';
+
+  if (distStr !== '') {
+    const distCm = parseFloat(distStr);
+    if (isNaN(distCm) || distCm <= 0) {
+      statusEl.innerText = 'Please enter a valid Distance > 0 cm';
+      return;
+    }
+    // 10 cm = 2 sec => 1 cm = 0.2 sec
+    durationSec = distCm * (2.0 / 10.0);
+    summaryDesc = `${distCm} cm (${durationSec.toFixed(1)}s)`;
+  } else if (timeStr !== '') {
+    const timeSec = parseFloat(timeStr);
+    if (isNaN(timeSec) || timeSec <= 0) {
+      statusEl.innerText = 'Please enter a valid Time > 0 sec';
+      return;
+    }
+    durationSec = timeSec;
+    const estCm = (timeSec * (10.0 / 2.0)).toFixed(1);
+    summaryDesc = `${timeSec}s (~${estCm} cm)`;
+  } else {
+    statusEl.innerText = 'Please enter either Distance (cm) OR Time (sec)';
+    return;
+  }
+
+  clearAutoDriveTimers(false);
+
+  const dirLabel = dir === 'F' ? 'FORWARD' : 'BACKWARD';
+  executeManeuver(dir);
+
+  const endTime = Date.now() + Math.round(durationSec * 1000);
+  statusEl.innerText = `Running ${dirLabel}: ${durationSec.toFixed(1)}s left | Target: ${summaryDesc}`;
+
+  autoDriveInterval = setInterval(() => {
+    const remainingMs = endTime - Date.now();
+    if (remainingMs > 0) {
+      statusEl.innerText = `Running ${dirLabel}: ${(remainingMs / 1000).toFixed(1)}s left | Target: ${summaryDesc}`;
+    }
+  }, 100);
+
+  autoDriveTimer = setTimeout(() => {
+    clearAutoDriveTimers(false);
+    stopAll();
+    statusEl.innerText = `Completed ${dirLabel}: ${summaryDesc}`;
+  }, Math.round(durationSec * 1000));
+}
+
 function stopAll() {
+  clearAutoDriveTimers(true);
   activeMove = null;
   document.querySelectorAll('.ctrl-btn').forEach(b => b.classList.remove('pressed'));
   updateChassisVisualizer(
@@ -1076,6 +1275,20 @@ document.querySelectorAll('.ctrl-btn[data-move]').forEach(btn => {
 const keysDown = new Set();
 window.addEventListener('keydown', (e) => {
   const key = e.key.toLowerCase();
+  const activeEl = document.activeElement;
+  const isTypingField = activeEl && (
+    (activeEl.tagName === 'INPUT' && activeEl.type === 'number') ||
+    activeEl.tagName === 'SELECT'
+  );
+
+  if (isTypingField) {
+    if (key === 'enter') {
+      e.preventDefault();
+      activeEl.blur();
+      runAutoDrive();
+    }
+    return;
+  }
 
   // Always allow Spacebar or X to stop immediately, even if a slider/button had focus
   if (key === ' ' || key === 'x') {
