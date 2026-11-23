@@ -35,6 +35,8 @@ SoftwareSerial espSerial(A2, A3);
 void setup() {
   Serial.begin(9600);
   espSerial.begin(9600);
+  espSerial.setTimeout(50); // Prevent 1000ms blocking timeout on serial read
+  Serial.setTimeout(50);
 
   int pins[] = {
     ENA1, IN1, IN2,
@@ -106,13 +108,15 @@ void stopAll() {
     setMotorPins(m, 0, 'F');
   }
   Serial.println("[STOP] All 4 wheels stopped");
+  espSerial.println("K");
 }
 
 void processCommand(String cmd) {
   cmd.trim();
   if (cmd.length() == 0) return;
 
-  if (cmd == "STOP") {
+  cmd.toUpperCase();
+  if (cmd.indexOf("STOP") >= 0 || cmd == "S") {
     stopAll();
     return;
   }

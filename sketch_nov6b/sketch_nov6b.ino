@@ -1339,6 +1339,7 @@ function runAutoDrive() {
 function stopAll() {
   clearAutoDriveTimers(true);
   activeMove = null;
+  joyStopped = true;
   document.querySelectorAll('.ctrl-btn').forEach(b => b.classList.remove('pressed'));
   updateChassisVisualizer(
     { 1: {s:0,d:'F'}, 2: {s:0,d:'F'}, 3: {s:0,d:'F'}, 4: {s:0,d:'F'} },
@@ -1367,6 +1368,7 @@ function stopAll() {
   }
 
   sendQueuedRequest('/stopall', 'STOPPED');
+  fetch('/stopall', { cache: 'no-store' }).catch(() => {});
 }
 
 // Single motor bench test functions
@@ -1645,6 +1647,7 @@ const joyBase = document.getElementById('joyBase');
 const joyStick = document.getElementById('joyStick');
 let joyActive = false;
 let lastJoySent = 0;
+let joyStopped = true;
 
 function handleJoyMove(clientX, clientY) {
   const rect = joyBase.getBoundingClientRect();
@@ -1663,18 +1666,26 @@ function handleJoyMove(clientX, clientY) {
 
   joyStick.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
 
-  const now = Date.now();
-  if (now - lastJoySent < 120) return;
-  lastJoySent = now;
-
   // Normalize -1..1 (throttle = -dy, steering = dx)
   const normY = -dy / maxR;
   const normX = dx / maxR;
+  const joyMagnitude = Math.hypot(normX, normY);
 
-  if (Math.hypot(normX, normY) < 0.15) {
-    stopAll();
+  // 1. DEADZONE / MID-POSITION CHECK: Checked immediately without rate-limit delay
+  if (joyMagnitude < 0.20) {
+    if (!joyStopped) {
+      joyStopped = true;
+      lastJoySent = Date.now();
+      stopAll();
+    }
     return;
   }
+
+  // 2. RATE LIMITER: 90ms intervals for active driving commands
+  const now = Date.now();
+  if (now - lastJoySent < 90) return;
+  lastJoySent = now;
+  joyStopped = false;
 
   const steerX = normY >= 0 ? -normX : normX;
   let leftVal = (normY + steerX) * masterSpeed;
@@ -1690,29 +1701,45 @@ function handleJoyMove(clientX, clientY) {
 }
 
 function resetJoystick() {
-  if (!joyActive) return;
+  if (!joyActive && joyStopped) return;
   joyActive = false;
+  joyStopped = true;
   joyStick.style.transform = 'translate(-50%, -50%)';
   stopAll();
 }
 
-joyBase.addEventListener('mousedown', (e) => { joyActive = true; handleJoyMove(e.clientX, e.clientY); });
-window.addEventListener('mousemove', (e) => { if (joyActive) handleJoyMove(e.clientX, e.clientY); });
+// Mouse Listeners
+joyBase.addEventListener('mousedown', (e) => {
+  joyActive = true;
+  joyStopped = false;
+  handleJoyMove(e.clientX, e.clientY);
+});
+window.addEventListener('mousemove', (e) => {
+  if (joyActive) handleJoyMove(e.clientX, e.clientY);
+});
 window.addEventListener('mouseup', resetJoystick);
 
+// Touch Listeners: window-level tracking ensures releasing anywhere stops the bot
 joyBase.addEventListener('touchstart', (e) => {
   e.preventDefault();
   joyActive = true;
+  joyStopped = false;
   handleJoyMove(e.touches[0].clientX, e.touches[0].clientY);
 }, { passive: false });
 
-joyBase.addEventListener('touchmove', (e) => {
-  e.preventDefault();
-  if (joyActive) handleJoyMove(e.touches[0].clientX, e.touches[0].clientY);
+window.addEventListener('touchmove', (e) => {
+  if (joyActive && e.touches.length > 0) {
+    e.preventDefault();
+    handleJoyMove(e.touches[0].clientX, e.touches[0].clientY);
+  }
 }, { passive: false });
 
-joyBase.addEventListener('touchend', resetJoystick);
-joyBase.addEventListener('touchcancel', resetJoystick);
+window.addEventListener('touchend', (e) => {
+  if (joyActive) resetJoystick();
+});
+window.addEventListener('touchcancel', (e) => {
+  if (joyActive) resetJoystick();
+});
 </script>
 </body>
 </html>
@@ -1766,16 +1793,38 @@ void sendMotorToUno(int motor, int speed, const String& dir) {
   unoSerial.flush();
 
   unsigned long start = millis();
-  while (millis() - start < 70) {
+  while (millis() - start < 35) {
     if (unoSerial.available()) {
       char c = unoSerial.read();
       if (c == '\n') {
-        delay(5);
+        delay(2);
         break;
       }
     }
     yield();
   }
+}
+
+// Robust stop sequence to ensure Arduino Uno receives and executes the stop command
+void sendStopToUno() {
+  while (unoSerial.available()) {
+    unoSerial.read();
+  }
+  // Send multiple STOP signals with small delay to prevent SoftwareSerial packet drops
+  unoSerial.println("STOP");
+  delay(10);
+  unoSerial.println("STOP");
+  delay(10);
+  unoSerial.println("M1,0,F");
+  delay(4);
+  unoSerial.println("M2,0,F");
+  delay(4);
+  unoSerial.println("M3,0,F");
+  delay(4);
+  unoSerial.println("M4,0,F");
+  delay(4);
+  unoSerial.println("STOP");
+  unoSerial.flush();
 }
 
 // Synchronized 4-wheel car drive endpoint:
@@ -1786,6 +1835,14 @@ void handleDrive() {
   int s2 = constrain(server.arg("s2").toInt(), 0, 255);
   int s3 = constrain(server.arg("s3").toInt(), 0, 255);
   int s4 = constrain(server.arg("s4").toInt(), 0, 255);
+
+  // If all speeds are zero, route directly to stopAll for an immediate complete shutdown
+  if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 0) {
+    sendStopToUno();
+    Serial.println("[CAR -> UNO] ALL STOPPED (Speed = 0)");
+    server.send(200, "text/plain", "ALL MOTORS STOPPED");
+    return;
+  }
 
   String d1 = server.arg("d1") == "R" ? "R" : "F";
   String d2 = server.arg("d2") == "R" ? "R" : "F";
@@ -1958,7 +2015,7 @@ void processSerialN20Command(String cmd) {
 }
 
 void handleStopAll() {
-  unoSerial.println("STOP");
+  sendStopToUno();
   controlN20Motor("STOP", 0, n20PowerState);
   Serial.println("[CMD -> UNO] STOP (All 4 wheels stopped)");
   Serial.println("[N20 MOTOR] Stopped via Stop All");
