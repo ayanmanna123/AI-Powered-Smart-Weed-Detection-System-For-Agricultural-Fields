@@ -2,6 +2,19 @@
 #include <ESP8266WebServer.h>
 #include <SoftwareSerial.h>
 
+// ============================================================================
+// TB6612FNG MOTOR DRIVER & N20 GEAR MOTOR PIN DIAGRAM
+// PWMA (Speed)    -> D1   [PWM Speed Control]
+// AIN1 (Dir 1)    -> D2   [Direction Logic 1]
+// AIN2 (Dir 2)    -> D4   [Direction Logic 2]
+// STBY (Standby)  -> D7   [Standby Logic: HIGH = Active, LOW = Standby/Off]
+// ============================================================================
+#define PIN_PWMA  D1  // PWM Speed Control (GPIO5)
+#define PIN_AIN1  D2  // Direction Logic 1 (GPIO4)
+#define PIN_AIN2  D4  // Direction Logic 2 (GPIO2)
+#define PIN_STBY  D7  // Standby Control   (GPIO13)
+
+// SoftwareSerial to Arduino UNO (for 4WD rover chassis):
 // RX = D6 (GPIO12), TX = D5 (GPIO14)
 SoftwareSerial unoSerial(D6, D5);
 
@@ -636,6 +649,69 @@ const char webpage[] PROGMEM = R"rawliteral(
     justify-content: space-between;
     align-items: center;
   }
+
+  /* N20 Motor & TB6612FNG Driver Bench Test Styles */
+  .n20-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+    align-items: stretch;
+  }
+  @media (max-width: 760px) {
+    .n20-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+  .pin-badge-row {
+    background: #111827;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 8px 12px;
+    margin-bottom: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    font-size: 0.76rem;
+    align-items: center;
+  }
+  .pin-item {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-weight: 600;
+  }
+  .pin-pill {
+    padding: 2px 7px;
+    border-radius: 5px;
+    font-weight: 800;
+    font-size: 0.72rem;
+  }
+  .btn-power-on {
+    background: linear-gradient(135deg, #10b981, #059669);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 0.84rem;
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+    transition: transform 0.08s, opacity 0.15s;
+  }
+  .btn-power-on:active { transform: scale(0.97); }
+  .btn-power-off {
+    background: linear-gradient(135deg, #ef4444, #dc2626);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    padding: 10px 14px;
+    font-size: 0.84rem;
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+    transition: transform 0.08s, opacity 0.15s;
+  }
+  .btn-power-off:active { transform: scale(0.97); }
 </style>
 </head>
 <body>
@@ -840,6 +916,84 @@ const char webpage[] PROGMEM = R"rawliteral(
     <div class="auto-status" id="autoDriveStatus">
       <span id="autoStatusText">Ready: Enter distance (cm) or time (sec) and click Submit</span>
       <span id="autoCalcBadge" style="color:var(--muted);font-size:0.76rem;">10 cm = 2.0 s (5 cm/s)</span>
+    </div>
+  </div>
+
+  <!-- N20 Gear Motor & TB6612FNG Driver Test Section -->
+  <div class="panel" style="margin-top: 14px;">
+    <div class="panel-header">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <span class="panel-title">N20 Gear Motor &amp; TB6612FNG Test Bench</span>
+        <span class="badge" id="n20PowerBadge" style="background:rgba(16,185,129,0.15);border-color:var(--green);color:var(--green);">POWER: ON (STBY HIGH)</span>
+      </div>
+      <div class="badge state-pill" id="n20StateBadge">STATE: STOPPED</div>
+    </div>
+
+    <!-- Wiring Pin Diagram Banner -->
+    <div class="pin-badge-row">
+      <span style="color:var(--muted);font-weight:700;">PIN DIAGRAM:</span>
+      <div class="pin-item" style="color:var(--accent);">
+        <span>PWMA (Speed):</span>
+        <span class="pin-pill" style="background:rgba(56,189,248,0.2);color:var(--accent);border:1px solid var(--accent);">D1 [PWM Speed Control]</span>
+      </div>
+      <div class="pin-item" style="color:#34d399;">
+        <span>AIN1 (Dir 1):</span>
+        <span class="pin-pill" style="background:rgba(52,211,153,0.2);color:#34d399;border:1px solid #34d399;">D2 [Direction Logic 1]</span>
+      </div>
+      <div class="pin-item" style="color:#60a5fa;">
+        <span>AIN2 (Dir 2):</span>
+        <span class="pin-pill" style="background:rgba(96,165,250,0.2);color:#60a5fa;border:1px solid #60a5fa;">D4 [Direction Logic 2]</span>
+      </div>
+      <div class="pin-item" style="color:#f59e0b;">
+        <span>STBY (Standby):</span>
+        <span class="pin-pill" style="background:rgba(245,158,11,0.2);color:#f59e0b;border:1px solid #f59e0b;">D7 [Standby Control]</span>
+      </div>
+    </div>
+
+    <div class="n20-grid">
+      <!-- Left: Speed Control & Presets -->
+      <div class="speed-box" style="margin-bottom:0;display:flex;flex-direction:column;justify-content:space-between;">
+        <div>
+          <div class="speed-header">
+            <span>N20 Motor Speed (PWM)</span>
+            <span class="speed-val"><span id="n20SpeedVal">180</span> / 255</span>
+          </div>
+          <input type="range" id="n20Speed" min="0" max="255" value="180" oninput="updateN20Speed(this.value)">
+        </div>
+        <div class="gears" style="margin-top:10px;">
+          <button class="gear-btn" id="n20Gear1" onclick="setN20SpeedPreset(70, 1)">SLOW (70)</button>
+          <button class="gear-btn" id="n20Gear2" onclick="setN20SpeedPreset(130, 2)">MED (130)</button>
+          <button class="gear-btn active" id="n20Gear3" onclick="setN20SpeedPreset(180, 3)">FAST (180)</button>
+          <button class="gear-btn" id="n20Gear4" onclick="setN20SpeedPreset(255, 4)">MAX (255)</button>
+        </div>
+      </div>
+
+      <!-- Right: Direction & On/Off Controls -->
+      <div style="display:flex;flex-direction:column;justify-content:space-between;gap:10px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+          <button class="ctrl-btn primary-dir" id="n20FwdBtn" style="height:58px;" onclick="setN20Direction('F')">
+            <span class="arrow" style="font-size:1.3rem;">&#9650;</span>
+            <span class="lbl">FORWARD</span>
+          </button>
+          <button class="ctrl-btn primary-dir" id="n20RevBtn" style="height:58px;" onclick="setN20Direction('B')">
+            <span class="arrow" style="font-size:1.3rem;">&#9660;</span>
+            <span class="lbl">BACKWARD</span>
+          </button>
+          <button class="ctrl-btn stop-center" style="height:58px;" onclick="stopN20Motor()">
+            <span class="arrow" style="font-size:1.3rem;">&#9632;</span>
+            <span class="lbl">STOP</span>
+          </button>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+          <button class="btn-power-on" id="n20PowerOnBtn" onclick="setN20Power(true)">
+            &#9889; MOTOR ON (STBY HIGH)
+          </button>
+          <button class="btn-power-off" id="n20PowerOffBtn" onclick="setN20Power(false)">
+            &#9211; MOTOR OFF (STBY LOW)
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1199,6 +1353,19 @@ function stopAll() {
     if (vl) vl.innerText = 0;
   }
 
+  // Update N20 UI indicators on stop all
+  const n20Badge = document.getElementById('n20StateBadge');
+  if (n20Badge && n20Power) {
+    n20CurrentDir = 'STOP';
+    n20Badge.innerText = 'STATE: STOPPED';
+    n20Badge.style.color = 'var(--accent)';
+    n20Badge.style.borderColor = 'var(--accent)';
+    const n20Fwd = document.getElementById('n20FwdBtn');
+    const n20Rev = document.getElementById('n20RevBtn');
+    if (n20Fwd) n20Fwd.classList.remove('pressed');
+    if (n20Rev) n20Rev.classList.remove('pressed');
+  }
+
   sendQueuedRequest('/stopall', 'STOPPED');
 }
 
@@ -1241,6 +1408,115 @@ function stopSingleMotor(id) {
   document.getElementById('mspeed' + id).value = 0;
   document.getElementById('mval' + id).innerText = 0;
   sendSingleMotor(id);
+}
+
+// N20 Motor & TB6612FNG Driver Bench Test Functions
+let n20Speed = 180;
+let n20CurrentDir = 'STOP';
+let n20Power = true;
+
+function updateN20Speed(val) {
+  n20Speed = parseInt(val, 10);
+  document.getElementById('n20SpeedVal').innerText = n20Speed;
+  document.querySelectorAll('[id^="n20Gear"]').forEach(b => b.classList.remove('active'));
+  if (n20Power && (n20CurrentDir === 'F' || n20CurrentDir === 'B')) {
+    sendQueuedRequest(`/n20?dir=${n20CurrentDir}&speed=${n20Speed}&power=1`, `N20: ${n20CurrentDir === 'F' ? 'FWD' : 'REV'} ${n20Speed}`);
+  }
+}
+
+function setN20SpeedPreset(val, gearIdx) {
+  document.getElementById('n20Speed').value = val;
+  document.getElementById('n20SpeedVal').innerText = val;
+  n20Speed = val;
+  document.querySelectorAll('[id^="n20Gear"]').forEach(b => b.classList.remove('active'));
+  const targetGear = document.getElementById('n20Gear' + gearIdx);
+  if (targetGear) targetGear.classList.add('active');
+  if (n20Power && (n20CurrentDir === 'F' || n20CurrentDir === 'B')) {
+    sendQueuedRequest(`/n20?dir=${n20CurrentDir}&speed=${n20Speed}&power=1`, `N20: ${n20CurrentDir === 'F' ? 'FWD' : 'REV'} ${n20Speed}`);
+  }
+}
+
+function setN20Direction(dir) {
+  if (!n20Power) {
+    setN20Power(true);
+  }
+  n20CurrentDir = dir;
+  const badge = document.getElementById('n20StateBadge');
+  const fwdBtn = document.getElementById('n20FwdBtn');
+  const revBtn = document.getElementById('n20RevBtn');
+
+  if (fwdBtn) fwdBtn.classList.toggle('pressed', dir === 'F');
+  if (revBtn) revBtn.classList.toggle('pressed', dir === 'B');
+
+  if (dir === 'F') {
+    badge.innerText = 'STATE: FORWARD (' + n20Speed + ')';
+    badge.style.color = 'var(--green)';
+    badge.style.borderColor = 'var(--green)';
+  } else if (dir === 'B') {
+    badge.innerText = 'STATE: BACKWARD (' + n20Speed + ')';
+    badge.style.color = 'var(--amber)';
+    badge.style.borderColor = 'var(--amber)';
+  }
+  sendQueuedRequest(`/n20?dir=${dir}&speed=${n20Speed}&power=1`, `N20: ${dir === 'F' ? 'FWD' : 'REV'} ${n20Speed}`);
+}
+
+function stopN20Motor() {
+  n20CurrentDir = 'STOP';
+  const badge = document.getElementById('n20StateBadge');
+  if (badge) {
+    badge.innerText = 'STATE: STOPPED';
+    badge.style.color = 'var(--accent)';
+    badge.style.borderColor = 'var(--accent)';
+  }
+  const fwdBtn = document.getElementById('n20FwdBtn');
+  const revBtn = document.getElementById('n20RevBtn');
+  if (fwdBtn) fwdBtn.classList.remove('pressed');
+  if (revBtn) revBtn.classList.remove('pressed');
+
+  sendQueuedRequest(`/n20?dir=STOP&speed=0&power=${n20Power ? 1 : 0}`, 'N20: STOPPED');
+}
+
+function setN20Power(on) {
+  n20Power = on;
+  const pBadge = document.getElementById('n20PowerBadge');
+  const sBadge = document.getElementById('n20StateBadge');
+  const fwdBtn = document.getElementById('n20FwdBtn');
+  const revBtn = document.getElementById('n20RevBtn');
+
+  if (on) {
+    if (pBadge) {
+      pBadge.innerText = 'POWER: ON (STBY HIGH)';
+      pBadge.style.color = 'var(--green)';
+      pBadge.style.borderColor = 'var(--green)';
+      pBadge.style.background = 'rgba(16,185,129,0.15)';
+    }
+    if (n20CurrentDir === 'F' || n20CurrentDir === 'B') {
+      setN20Direction(n20CurrentDir);
+    } else {
+      if (sBadge) {
+        sBadge.innerText = 'STATE: STOPPED';
+        sBadge.style.color = 'var(--accent)';
+        sBadge.style.borderColor = 'var(--accent)';
+      }
+      sendQueuedRequest(`/n20?power=1&dir=STOP&speed=0`, 'N20: ON (STBY HIGH)');
+    }
+  } else {
+    n20CurrentDir = 'OFF';
+    if (fwdBtn) fwdBtn.classList.remove('pressed');
+    if (revBtn) revBtn.classList.remove('pressed');
+    if (pBadge) {
+      pBadge.innerText = 'POWER: OFF (STBY LOW)';
+      pBadge.style.color = 'var(--red)';
+      pBadge.style.borderColor = 'var(--red)';
+      pBadge.style.background = 'rgba(239,68,68,0.15)';
+    }
+    if (sBadge) {
+      sBadge.innerText = 'STATE: OFF (STBY LOW)';
+      sBadge.style.color = 'var(--red)';
+      sBadge.style.borderColor = 'var(--red)';
+    }
+    sendQueuedRequest('/n20?power=0&dir=STOP&speed=0', 'N20: OFF (STBY LOW)');
+  }
 }
 
 // Attach Touch & Mouse events to D-Pad buttons
@@ -1529,9 +1805,163 @@ void handleDrive() {
   server.send(200, "text/plain", "DRIVE OK");
 }
 
+// =========================================================
+// TB6612FNG & N20 MOTOR HARDWARE CONTROL FUNCTIONS
+// =========================================================
+int n20Speed = 180;
+bool n20PowerState = true;
+String n20Direction = "STOP";
+
+void initTB6612FNG() {
+  pinMode(PIN_PWMA, OUTPUT);
+  pinMode(PIN_AIN1, OUTPUT);
+  pinMode(PIN_AIN2, OUTPUT);
+  pinMode(PIN_STBY, OUTPUT);
+
+  // Initialize TB6612FNG with standby enabled, motor stopped
+  digitalWrite(PIN_STBY, HIGH);
+  digitalWrite(PIN_AIN1, LOW);
+  digitalWrite(PIN_AIN2, LOW);
+  analogWrite(PIN_PWMA, 0);
+
+  Serial.println("[TB6612FNG] N20 Motor Initialized:");
+  Serial.println("  PWMA (Speed)   -> D1 [PWM Speed Control]");
+  Serial.println("  AIN1 (Dir 1)   -> D2 [Direction Logic 1]");
+  Serial.println("  AIN2 (Dir 2)   -> D4 [Direction Logic 2]");
+  Serial.println("  STBY (Standby) -> D7 [Standby Logic]");
+}
+
+void controlN20Motor(const String& dir, int speed, bool power) {
+  n20PowerState = power;
+  if (!n20PowerState) {
+    digitalWrite(PIN_STBY, LOW); // Cut power / put TB6612FNG into Standby
+    digitalWrite(PIN_AIN1, LOW);
+    digitalWrite(PIN_AIN2, LOW);
+    analogWrite(PIN_PWMA, 0);
+    n20Direction = "OFF";
+    Serial.println("[N20 MOTOR] Power OFF (STBY = LOW)");
+    return;
+  }
+
+  // Ensure STBY is HIGH (active)
+  digitalWrite(PIN_STBY, HIGH);
+
+  speed = constrain(speed, 0, 255);
+  n20Speed = speed;
+
+  if (dir == "F" || dir == "FWD" || dir == "FORWARD") {
+    digitalWrite(PIN_AIN1, HIGH);
+    digitalWrite(PIN_AIN2, LOW);
+    analogWrite(PIN_PWMA, speed);
+    n20Direction = "FORWARD";
+    Serial.printf("[N20 MOTOR] FORWARD | Speed: %d (PWMA: D1, AIN1: D2=HIGH, AIN2: D4=LOW)\n", speed);
+  } else if (dir == "B" || dir == "R" || dir == "REV" || dir == "BACKWARD") {
+    digitalWrite(PIN_AIN1, LOW);
+    digitalWrite(PIN_AIN2, HIGH);
+    analogWrite(PIN_PWMA, speed);
+    n20Direction = "BACKWARD";
+    Serial.printf("[N20 MOTOR] BACKWARD | Speed: %d (PWMA: D1, AIN1: D2=LOW, AIN2: D4=HIGH)\n", speed);
+  } else { // STOP / BRAKE
+    digitalWrite(PIN_AIN1, LOW);
+    digitalWrite(PIN_AIN2, LOW);
+    analogWrite(PIN_PWMA, 0);
+    n20Direction = "STOP";
+    Serial.println("[N20 MOTOR] STOPPED (PWMA: D1=0, AIN1: D2=LOW, AIN2: D4=LOW)");
+  }
+}
+
+// Endpoint: /n20?dir=F&speed=180&power=1
+// Also supports /n20?action=forward / backward / stop / on / off
+void handleN20() {
+  bool power = n20PowerState;
+  if (server.hasArg("power")) {
+    int p = server.arg("power").toInt();
+    power = (p != 0);
+  }
+
+  int speed = n20Speed;
+  if (server.hasArg("speed")) {
+    speed = constrain(server.arg("speed").toInt(), 0, 255);
+  }
+
+  String dir = n20Direction;
+  if (server.hasArg("dir")) {
+    dir = server.arg("dir");
+    dir.toUpperCase();
+  } else if (server.hasArg("action")) {
+    dir = server.arg("action");
+    dir.toUpperCase();
+  }
+
+  controlN20Motor(dir, speed, power);
+
+  String resp = "OK: N20 Motor power=" + String(power ? "1" : "0") +
+                " dir=" + dir + " speed=" + String(speed);
+  server.send(200, "text/plain", resp);
+}
+
+void processSerialN20Command(String cmd) {
+  cmd.trim();
+  cmd.toUpperCase();
+
+  if (cmd == "HELP" || cmd == "?") {
+    Serial.println("--- N20 TB6612FNG Serial Commands ---");
+    Serial.println("  N20 FWD [speed]   -> Run Forward (e.g. N20 FWD 200)");
+    Serial.println("  N20 REV [speed]   -> Run Backward (e.g. N20 REV 200)");
+    Serial.println("  N20 STOP          -> Stop motor");
+    Serial.println("  N20 ON            -> Enable STBY (Power ON)");
+    Serial.println("  N20 OFF           -> Disable STBY (Power OFF)");
+    Serial.println("  N20 SPEED [val]   -> Set speed (0-255)");
+    Serial.println("-------------------------------------");
+    return;
+  }
+
+  if (cmd.startsWith("N20")) {
+    cmd = cmd.substring(3);
+    cmd.trim();
+  }
+
+  if (cmd.startsWith("FWD") || cmd.startsWith("F")) {
+    int spd = n20Speed;
+    int spaceIdx = cmd.indexOf(' ');
+    if (spaceIdx > 0) {
+      int parsed = cmd.substring(spaceIdx + 1).toInt();
+      if (parsed > 0) spd = parsed;
+    }
+    controlN20Motor("FORWARD", spd, true);
+  } else if (cmd.startsWith("REV") || cmd.startsWith("B") || cmd.startsWith("R")) {
+    int spd = n20Speed;
+    int spaceIdx = cmd.indexOf(' ');
+    if (spaceIdx > 0) {
+      int parsed = cmd.substring(spaceIdx + 1).toInt();
+      if (parsed > 0) spd = parsed;
+    }
+    controlN20Motor("BACKWARD", spd, true);
+  } else if (cmd == "STOP" || cmd == "S") {
+    controlN20Motor("STOP", 0, n20PowerState);
+  } else if (cmd == "ON") {
+    controlN20Motor(n20Direction == "OFF" ? "STOP" : n20Direction, n20Speed, true);
+  } else if (cmd == "OFF") {
+    controlN20Motor("STOP", 0, false);
+  } else if (cmd.startsWith("SPEED")) {
+    int spaceIdx = cmd.indexOf(' ');
+    if (spaceIdx > 0) {
+      int spd = cmd.substring(spaceIdx + 1).toInt();
+      n20Speed = constrain(spd, 0, 255);
+      if (n20Direction == "FORWARD" || n20Direction == "BACKWARD") {
+        controlN20Motor(n20Direction, n20Speed, n20PowerState);
+      } else {
+        Serial.printf("[N20 MOTOR] Speed preset updated to %d\n", n20Speed);
+      }
+    }
+  }
+}
+
 void handleStopAll() {
   unoSerial.println("STOP");
+  controlN20Motor("STOP", 0, n20PowerState);
   Serial.println("[CMD -> UNO] STOP (All 4 wheels stopped)");
+  Serial.println("[N20 MOTOR] Stopped via Stop All");
   server.send(200, "text/plain", "All motors stopped");
 }
 
@@ -1550,11 +1980,19 @@ void setup() {
   unoSerial.begin(9600);
   delay(500);
 
+  // Setup ESP8266 PWM range (0-255) and frequency (1kHz)
+  analogWriteRange(255);
+  analogWriteFreq(1000);
+
+  // Initialize TB6612FNG Driver for N20 Motor
+  initTB6612FNG();
+
   Serial.println();
   Serial.println("==========================================");
   Serial.println("Starting ESP8266 RC Rover Pro Dashboard...");
   Serial.println("Front: M4 (Left), M3 (Right)");
   Serial.println("Rear:  M2 (Left), M1 (Right)");
+  Serial.println("N20 Motor (TB6612FNG): D1, D2, D4, D7");
   Serial.println("==========================================");
 
   // Clear previous AP settings and connect to Wi-Fi router
@@ -1599,6 +2037,7 @@ void setup() {
   server.on("/cmd", handleCommand);
   server.on("/drive", handleDrive);
   server.on("/stopall", handleStopAll);
+  server.on("/n20", handleN20);
   server.onNotFound(handleNotFound);
 
   server.begin();
@@ -1617,6 +2056,15 @@ void loop() {
     if (unoMsg.length() > 0) {
       Serial.print("[UNO -> ESP] ");
       Serial.println(unoMsg);
+    }
+  }
+
+  // Also support testing N20 motor directly from USB Serial Monitor
+  if (Serial.available()) {
+    String serCmd = Serial.readStringUntil('\n');
+    serCmd.trim();
+    if (serCmd.length() > 0) {
+      processSerialN20Command(serCmd);
     }
   }
 }
