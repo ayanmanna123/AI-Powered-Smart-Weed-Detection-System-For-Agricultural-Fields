@@ -819,7 +819,7 @@ const char webpage[] PROGMEM = R"rawliteral(
         <p class="hint-bar">Drag joystick in any direction &bull; Release to auto-stop</p>
       </div>
 
-      <button class="estop-btn" onclick="stopAll()">&#9888; EMERGENCY STOP ALL MOTORS (SPACE)</button>
+      <button class="estop-btn" onclick="emergencyStopAll()">&#9888; EMERGENCY STOP ALL MOTORS (SPACE)</button>
       <div class="hint-bar">
         Keyboard: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or <kbd>&uarr;</kbd><kbd>&larr;</kbd><kbd>&darr;</kbd><kbd>&rarr;</kbd> to Drive &bull; <kbd>Space</kbd> Stop &bull; <kbd>1</kbd>-<kbd>4</kbd> Gears
       </div>
@@ -1041,10 +1041,14 @@ function processRequestQueue() {
   pendingReq = null;
   reqInFlight = true;
 
-  fetch(current.url, { cache: 'no-store' })
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), 1500) : null;
+
+  fetch(current.url, { cache: 'no-store', signal: controller ? controller.signal : undefined })
     .then(() => setConnStatus(true, current.statusText))
     .catch(() => setConnStatus(false, 'LINK ERR'))
     .finally(() => {
+      if (timeoutId) clearTimeout(timeoutId);
       reqInFlight = false;
       if (pendingReq) processRequestQueue();
     });
@@ -1354,21 +1358,16 @@ function stopAll() {
     if (vl) vl.innerText = 0;
   }
 
-  // Update N20 UI indicators on stop all
-  const n20Badge = document.getElementById('n20StateBadge');
-  if (n20Badge && n20Power) {
-    n20CurrentDir = 'STOP';
-    n20Badge.innerText = 'STATE: STOPPED';
-    n20Badge.style.color = 'var(--accent)';
-    n20Badge.style.borderColor = 'var(--accent)';
-    const n20Fwd = document.getElementById('n20FwdBtn');
-    const n20Rev = document.getElementById('n20RevBtn');
-    if (n20Fwd) n20Fwd.classList.remove('pressed');
-    if (n20Rev) n20Rev.classList.remove('pressed');
-  }
-
   sendQueuedRequest('/stopall', 'STOPPED');
   fetch('/stopall', { cache: 'no-store' }).catch(() => {});
+}
+
+// Emergency stop stops all 4 wheels AND the N20 motor
+function emergencyStopAll() {
+  stopAll();
+  stopN20Motor();
+  sendQueuedRequest('/stopall?all=1', 'EMERGENCY STOP');
+  fetch('/stopall?all=1', { cache: 'no-store' }).catch(() => {});
 }
 
 // Single motor bench test functions
@@ -1575,7 +1574,7 @@ window.addEventListener('keydown', (e) => {
       document.activeElement.blur();
     }
     keysDown.clear();
-    stopAll();
+    emergencyStopAll();
     return;
   }
 
@@ -1995,7 +1994,9 @@ void processSerialN20Command(String cmd) {
     }
     controlN20Motor("BACKWARD", spd, true);
   } else if (cmd == "STOP" || cmd == "S") {
+    sendStopToUno();
     controlN20Motor("STOP", 0, n20PowerState);
+    Serial.println("[ALL] All 4 wheels & N20 motor stopped");
   } else if (cmd == "ON") {
     controlN20Motor(n20Direction == "OFF" ? "STOP" : n20Direction, n20Speed, true);
   } else if (cmd == "OFF") {
@@ -2016,9 +2017,12 @@ void processSerialN20Command(String cmd) {
 
 void handleStopAll() {
   sendStopToUno();
-  controlN20Motor("STOP", 0, n20PowerState);
-  Serial.println("[CMD -> UNO] STOP (All 4 wheels stopped)");
-  Serial.println("[N20 MOTOR] Stopped via Stop All");
+  if (server.hasArg("all")) {
+    controlN20Motor("STOP", 0, n20PowerState);
+    Serial.println("[CMD -> UNO] EMERGENCY STOP (All 4 wheels & N20 motor stopped)");
+  } else {
+    Serial.println("[CMD -> UNO] STOP (All 4 wheels stopped)");
+  }
   server.send(200, "text/plain", "All motors stopped");
 }
 
@@ -2034,7 +2038,9 @@ void handleNotFound() {
 
 void setup() {
   Serial.begin(115200);
+  Serial.setTimeout(20);
   unoSerial.begin(9600);
+  unoSerial.setTimeout(20);
   delay(500);
 
   // Setup ESP8266 PWM range (0-255) and frequency (1kHz)
