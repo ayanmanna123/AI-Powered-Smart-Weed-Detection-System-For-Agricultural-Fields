@@ -1146,12 +1146,12 @@ export function VirtualEnvironmentPage({
         <div className="lg:col-span-3 flex flex-col gap-4">
           <Card className="border-zinc-800 bg-zinc-950/80 flex-1 flex flex-col">
             <CardHeader className="pb-2">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-xs font-bold text-zinc-100 flex items-center gap-2">
-                  <Plus className="size-4 text-emerald-400" />
-                  PLANT PALETTE (DRAG & DROP)
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-xs font-bold text-zinc-100 flex items-center gap-1.5 whitespace-nowrap">
+                  <Plus className="size-4 text-emerald-400 shrink-0" />
+                  <span>PLANT PALETTE</span>
                 </CardTitle>
-                <Badge variant="outline" className="text-[10px] font-mono">
+                <Badge variant="outline" className="text-[10px] font-mono shrink-0 whitespace-nowrap">
                   {plants.length} items
                 </Badge>
               </div>

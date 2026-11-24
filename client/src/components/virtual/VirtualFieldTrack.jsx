@@ -336,7 +336,7 @@ export function VirtualFieldTrack({
                 }`}
               >
                 <span
-                  className={`absolute right-2 top-1 text-[9px] font-mono px-1.5 py-0.5 rounded ${
+                  className={`absolute right-7 top-1 text-[9px] font-mono px-1.5 py-0.5 rounded ${
                     isActive
                       ? "bg-emerald-500 text-zinc-950 font-bold"
                       : "text-zinc-500/70"
@@ -392,7 +392,7 @@ export function VirtualFieldTrack({
                 title={`${plant.label} @ ${plant.positionCm} cm (X=${Math.round(
                   plant.lateralOffset * 100
                 )}%)`}
-                className={`group absolute -translate-x-1/2 translate-y-1/2 z-20 flex flex-col items-center ${
+                className={`group absolute -translate-x-1/2 translate-y-1/2 z-20 ${
                   isLocked ? "cursor-default" : "cursor-grab active:cursor-grabbing"
                 }`}
               >
@@ -449,7 +449,7 @@ export function VirtualFieldTrack({
                 </div>
 
                 <span
-                  className={`mt-0.5 px-1 rounded text-[7px] font-mono font-bold whitespace-nowrap leading-tight ${
+                  className={`absolute top-full mt-0.5 left-1/2 -translate-x-1/2 px-1 rounded text-[7px] font-mono font-bold whitespace-nowrap leading-tight pointer-events-none ${
                     isSprayed
                       ? "bg-zinc-800 text-zinc-400 line-through"
                       : isWeed
