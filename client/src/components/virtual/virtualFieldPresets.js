@@ -78,19 +78,19 @@ export function createPlantInstance(templateKey, positionCm, lateralOffset = 0) 
 export function buildDemoFieldPreset(trackLengthCm = 100) {
   const ratio = trackLengthCm / 100;
   const raw = [
-    { key: "crop_row", cm: 6, lat: -0.45 },
-    { key: "weed_broadleaf", cm: 8, lat: 0.55 },
-    { key: "weed_grassy", cm: 16, lat: -0.6 },
-    { key: "crop_seedling", cm: 24, lat: 0.1 },
-    { key: "weed_nutsedge", cm: 33, lat: 0.65 },
-    { key: "weed_broadleaf", cm: 37, lat: -0.35 },
-    { key: "crop_row", cm: 46, lat: 0.45 },
-    { key: "weed_sprout", cm: 54, lat: -0.5 },
-    { key: "crop_seedling", cm: 65, lat: -0.25 },
-    { key: "weed_grassy", cm: 73, lat: 0.55 },
-    { key: "weed_nutsedge", cm: 84, lat: -0.45 },
-    { key: "crop_row", cm: 93, lat: 0.2 },
-    { key: "weed_broadleaf", cm: 96, lat: -0.6 },
+    { key: "crop_row", cm: 6, lat: -0.75 },
+    { key: "weed_broadleaf", cm: 8, lat: 0.92 },
+    { key: "weed_grassy", cm: 16, lat: -0.94 },
+    { key: "crop_seedling", cm: 24, lat: 0.15 },
+    { key: "weed_nutsedge", cm: 33, lat: 0.95 },
+    { key: "weed_broadleaf", cm: 37, lat: -0.45 },
+    { key: "crop_row", cm: 46, lat: 0.75 },
+    { key: "weed_sprout", cm: 54, lat: -0.88 },
+    { key: "crop_seedling", cm: 65, lat: -0.3 },
+    { key: "weed_grassy", cm: 73, lat: 0.9 },
+    { key: "weed_nutsedge", cm: 84, lat: -0.92 },
+    { key: "crop_row", cm: 93, lat: 0.25 },
+    { key: "weed_broadleaf", cm: 96, lat: -0.95 },
   ];
 
   return raw
@@ -116,8 +116,8 @@ export function buildRandomField(trackLengthCm = 100) {
       const isWeed = Math.random() < 0.62;
       const pool = isWeed ? weedTemplates : cropTemplates;
       const key = pool[Math.floor(Math.random() * pool.length)];
-      const cm = z * 10 + 2 + Math.random() * 6;
-      const lat = (Math.random() * 1.5 - 0.75);
+      const cm = z * 10 + 1.5 + Math.random() * 7;
+      const lat = Math.random() * 2 - 1;
       items.push(createPlantInstance(key, cm, lat));
     }
   }
