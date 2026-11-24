@@ -72,11 +72,112 @@ export function loadImage(src) {
 }
 
 /**
+ * Compute non-overlapping (px, py) tile centers on a 512x512 camera frame so
+ * nearby plants in the same 10 cm bay never occlude each other for YOLOv8.
+ */
+function resolveNonOverlappingTiles(plants, zoneStartCm, zoneEndCm, frameSize = 512) {
+  if (!plants || plants.length === 0) return [];
+
+  const count = plants.length;
+  const patchSize = count === 1 ? 180 : count === 2 ? 156 : count <= 4 ? 132 : 108;
+  const gap = 14;
+  const minSep = patchSize + gap;
+  const margin = patchSize / 2 + 12;
+  const spanCm = Math.max(1, zoneEndCm - zoneStartCm);
+
+  const items = plants.map((plant) => {
+    const rawX = ((plant.lateralOffset + 1) / 2) * (frameSize - margin * 2) + margin;
+    const normY = (zoneEndCm - plant.positionCm) / spanCm;
+    const rawY = Math.max(margin, Math.min(frameSize - margin, normY * (frameSize - margin * 2) + margin));
+    return {
+      plant,
+      px: Math.max(margin, Math.min(frameSize - margin, rawX)),
+      py: Math.max(margin, Math.min(frameSize - margin, rawY)),
+      patchSize,
+    };
+  });
+
+  // Iterative pairwise separation along X/Y
+  for (let iter = 0; iter < 40; iter++) {
+    let moved = false;
+    for (let i = 0; i < items.length; i++) {
+      for (let j = i + 1; j < items.length; j++) {
+        const a = items[i];
+        const b = items[j];
+        let dx = b.px - a.px;
+        let dy = b.py - a.py;
+
+        // Break exact ties deterministically using lateral/position order
+        if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5) {
+          dx = (j - i) * 4;
+          dy = (j % 2 === 0 ? 1 : -1) * 2;
+        }
+
+        const overlapX = minSep - Math.abs(dx);
+        const overlapY = minSep - Math.abs(dy);
+
+        if (overlapX > 0 && overlapY > 0) {
+          moved = true;
+          if (overlapX < overlapY) {
+            const push = overlapX / 2 + 1;
+            const sign = dx >= 0 ? 1 : -1;
+            a.px -= sign * push;
+            b.px += sign * push;
+          } else {
+            const push = overlapY / 2 + 1;
+            const sign = dy >= 0 ? 1 : -1;
+            a.py -= sign * push;
+            b.py += sign * push;
+          }
+
+          a.px = Math.max(margin, Math.min(frameSize - margin, a.px));
+          a.py = Math.max(margin, Math.min(frameSize - margin, a.py));
+          b.px = Math.max(margin, Math.min(frameSize - margin, b.px));
+          b.py = Math.max(margin, Math.min(frameSize - margin, b.py));
+        }
+      }
+    }
+    if (!moved) break;
+  }
+
+  // Verify no residual AABB overlap; if crowded (e.g. 5+ items), fall back to crisp grid
+  let hasOverlap = false;
+  for (let i = 0; i < items.length && !hasOverlap; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      if (
+        Math.abs(items[i].px - items[j].px) < minSep - 2 &&
+        Math.abs(items[i].py - items[j].py) < minSep - 2
+      ) {
+        hasOverlap = true;
+        break;
+      }
+    }
+  }
+
+  if (hasOverlap) {
+    const cols = Math.ceil(Math.sqrt(count));
+    const rows = Math.ceil(count / cols);
+    const cellW = (frameSize - 24) / cols;
+    const cellH = (frameSize - 44) / rows;
+    const gridPatch = Math.max(84, Math.min(patchSize, Math.floor(Math.min(cellW, cellH) - 10)));
+    const ordered = [...items].sort((a, b) => a.py - b.py || a.px - b.px);
+    ordered.forEach((item, idx) => {
+      const col = idx % cols;
+      const row = Math.floor(idx / cols);
+      item.px = 12 + cellW * (col + 0.5);
+      item.py = 16 + cellH * (row + 0.5);
+      item.patchSize = gridPatch;
+    });
+  }
+
+  return items;
+}
+
+/**
  * Render a 512x512 top-down virtual camera frame for a 10 cm scan zone.
  *
- * Coordinate convention inside the 512x512 frame:
- *   X = 0..512 maps to lateralOffset -1.0 (Left) .. +1.0 (Right)
- *   Y = 0..512 maps to zoneEndCm (Top/Ahead) .. zoneStartCm (Bottom/Behind)
+ * Returns { dataUrl, placedTiles } where placedTiles records the exact
+ * non-overlapping canvas coordinates of each plant for accurate YOLO mapping.
  */
 export async function renderZoneCameraSnapshot({
   plants,
@@ -101,8 +202,8 @@ export async function renderZoneCameraSnapshot({
 
   // Subtle soil granules & furrow lines
   for (let i = 0; i < 220; i++) {
-    const gx = ((i * 73) % SIZE);
-    const gy = ((i * 137) % SIZE);
+    const gx = (i * 73) % SIZE;
+    const gy = (i * 137) % SIZE;
     ctx.fillStyle = i % 2 === 0 ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.16)";
     ctx.fillRect(gx, gy, 3, 3);
   }
@@ -120,13 +221,11 @@ export async function renderZoneCameraSnapshot({
     ctx.stroke();
   }
 
-  const spanCm = Math.max(1, zoneEndCm - zoneStartCm);
+  const placedTiles = resolveNonOverlappingTiles(plants, zoneStartCm, zoneEndCm, SIZE);
 
-  // Draw every plant in the current 10 cm zone
-  for (const plant of plants) {
-    const px = ((plant.lateralOffset + 1) / 2) * (SIZE - 140) + 70;
-    const normY = (zoneEndCm - plant.positionCm) / spanCm;
-    const py = Math.max(70, Math.min(SIZE - 70, normY * (SIZE - 120) + 60));
+  // Draw every plant in the current 10 cm zone without overlap
+  for (const tile of placedTiles) {
+    const { plant, px, py, patchSize } = tile;
 
     if (visualMode === "dataset" && plant.sampleImage) {
       let img = imageCache.get(plant.sampleImage);
@@ -139,10 +238,9 @@ export async function renderZoneCameraSnapshot({
         }
       }
       if (img) {
-        const patchSize = 180;
         ctx.save();
         ctx.beginPath();
-        ctx.roundRect(px - patchSize / 2, py - patchSize / 2, patchSize, patchSize, 14);
+        ctx.roundRect(px - patchSize / 2, py - patchSize / 2, patchSize, patchSize, 12);
         ctx.clip();
         ctx.drawImage(img, px - patchSize / 2, py - patchSize / 2, patchSize, patchSize);
         ctx.restore();
@@ -165,7 +263,10 @@ export async function renderZoneCameraSnapshot({
   ctx.font = "bold 12px monospace";
   ctx.fillText(`SCAN BAY: ${zoneStartCm.toFixed(0)}-${zoneEndCm.toFixed(0)} cm`, 16, SIZE - 17);
 
-  return canvas.toDataURL("image/jpeg", 0.88);
+  return {
+    dataUrl: canvas.toDataURL("image/jpeg", 0.88),
+    placedTiles,
+  };
 }
 
 function drawTopDownPlant(ctx, cx, cy, type) {
@@ -202,7 +303,7 @@ function drawTopDownPlant(ctx, cx, cy, type) {
  * Draw fallback bounding boxes onto a 512x512 snapshot when Python YOLO server
  * is offline or returns no synthetic detections.
  */
-export async function annotateFallbackFrame(rawDataUrl, plants, zoneStartCm, zoneEndCm) {
+export async function annotateFallbackFrame(rawDataUrl, plants, zoneStartCm, zoneEndCm, placedTiles = null) {
   const img = await loadImage(rawDataUrl);
   const SIZE = 512;
   const canvas = document.createElement("canvas");
@@ -211,13 +312,12 @@ export async function annotateFallbackFrame(rawDataUrl, plants, zoneStartCm, zon
   const ctx = canvas.getContext("2d");
   ctx.drawImage(img, 0, 0, SIZE, SIZE);
 
-  const spanCm = Math.max(1, zoneEndCm - zoneStartCm);
-  const detections = plants.map((plant) => {
-    const cx = Math.round(((plant.lateralOffset + 1) / 2) * (SIZE - 140) + 70);
-    const normY = (zoneEndCm - plant.positionCm) / spanCm;
-    const cy = Math.round(Math.max(70, Math.min(SIZE - 70, normY * (SIZE - 120) + 60)));
-    const boxW = plant.sampleImage ? 144 : 110;
-    const boxH = plant.sampleImage ? 144 : 110;
+  const tiles = placedTiles || resolveNonOverlappingTiles(plants, zoneStartCm, zoneEndCm, SIZE);
+  const detections = tiles.map(({ plant, px, py, patchSize }) => {
+    const cx = Math.round(px);
+    const cy = Math.round(py);
+    const boxW = plant.sampleImage ? Math.round(patchSize * 0.8) : 100;
+    const boxH = plant.sampleImage ? Math.round(patchSize * 0.8) : 100;
     const x1 = Math.max(4, cx - boxW / 2);
     const y1 = Math.max(4, cy - boxH / 2);
 

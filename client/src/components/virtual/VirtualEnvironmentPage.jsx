@@ -285,7 +285,7 @@ export function VirtualEnvironmentPage({
           (isLastZone ? p.positionCm <= zoneEnd : p.positionCm < zoneEnd)
       );
 
-      const rawSnapshot = await renderZoneCameraSnapshot({
+      const { dataUrl: rawSnapshot, placedTiles } = await renderZoneCameraSnapshot({
         plants: zonePlants,
         zoneStartCm: zoneStart,
         zoneEndCm: zoneEnd,
@@ -314,26 +314,33 @@ export function VirtualEnvironmentPage({
             annotatedUrl = yoloResult.annotated_image;
             latency = yoloResult.latency_ms;
 
-            // Map pixel (norm_x, norm_y) back to track coordinates
+            // Match each YOLO detection back to its exact non-overlapping plant tile
             const span = Math.max(1, zoneEnd - zoneStart);
             detectedList = yoloResult.detections.map((d, idx) => {
+              let bestTile = null;
+              let bestDist = Infinity;
+
+              for (const tile of placedTiles) {
+                const dist = Math.hypot(d.center_x - tile.px, d.center_y - tile.py);
+                // Prefer matching tile within patch bounds; slight preference for same class
+                const score = dist - (tile.plant.type === d.class ? 18 : 0);
+                if (dist <= tile.patchSize * 0.85 && score < bestDist) {
+                  bestDist = score;
+                  bestTile = tile;
+                }
+              }
+
               const estLat = Math.max(-0.85, Math.min(0.85, ((d.norm_x * 512 - 70) / (512 - 140)) * 2 - 1));
               const estCm = Math.max(
                 zoneStart,
                 Math.min(zoneEnd, zoneEnd - ((d.norm_y * 512 - 60) / (512 - 120)) * span)
               );
-              // Match nearest virtual plant of same class so we can mark it sprayed/protected
-              const nearest = zonePlants.find(
-                (p) =>
-                  p.type === d.class &&
-                  Math.abs(p.positionCm - estCm) < 3.5 &&
-                  Math.abs(p.lateralOffset - estLat) < 0.45
-              );
+
               return {
                 ...d,
-                plantId: nearest?.id || `yolo-${zoneIdx}-${idx}`,
-                positionCm: nearest ? nearest.positionCm : Number(estCm.toFixed(1)),
-                lateralOffset: nearest ? nearest.lateralOffset : Number(estLat.toFixed(2)),
+                plantId: bestTile?.plant?.id || `yolo-${zoneIdx}-${idx}`,
+                positionCm: bestTile ? bestTile.plant.positionCm : Number(estCm.toFixed(1)),
+                lateralOffset: bestTile ? bestTile.plant.lateralOffset : Number(estLat.toFixed(2)),
               };
             });
           }
@@ -344,7 +351,13 @@ export function VirtualEnvironmentPage({
 
       // Built-in Simulation Vision fallback (offline or schematic mode)
       if (usedSource !== "yolo") {
-        const fallback = await annotateFallbackFrame(rawSnapshot, zonePlants, zoneStart, zoneEnd);
+        const fallback = await annotateFallbackFrame(
+          rawSnapshot,
+          zonePlants,
+          zoneStart,
+          zoneEnd,
+          placedTiles
+        );
         annotatedUrl = fallback.annotated_image;
         detectedList = fallback.detections;
         usedSource = "fallback";
