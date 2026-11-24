@@ -56,8 +56,8 @@ export function VirtualFieldTrack({
     const relY = Math.max(0, Math.min(1, (rect.bottom - clientY) / rect.height));
     const relX = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
     const cm = Number((relY * trackLengthCm).toFixed(1));
-    // Restrict plants inside the sprayable row width (-0.82 .. +0.82)
-    const lat = Number(Math.max(-0.82, Math.min(0.82, (relX - 0.5) * 2)).toFixed(2));
+    // Inverse of latToLeftPct (50 + lat * 38) -> maps full inner bed (12%..88%) to -1.0..+1.0
+    const lat = Number(Math.max(-1, Math.min(1, (relX - 0.5) / 0.38)).toFixed(2));
     return { cm, lat };
   };
 
@@ -115,9 +115,9 @@ export function VirtualFieldTrack({
   };
 
   // Convert cm & lateral offset into CSS percentages
-  // Keep plants & nozzle inside the inner crop bed (~20%..80%) between the two outer wheel tracks
+  // Spans full inner crop bed (12%..88%) right up to the two outer wheel tracks
   const cmToBottomPct = (cm) => Math.max(0, Math.min(100, (cm / trackLengthCm) * 100));
-  const latToLeftPct = (lat) => 50 + lat * 32; // maps -0.82..+0.82 to ~24%..76%
+  const latToLeftPct = (lat) => 50 + lat * 38; // maps -1.0..+1.0 to 12%..88%
 
   const nozzleBottomPct = cmToBottomPct(nozzleCm);
   const nozzleLeftPct = latToLeftPct(nozzleX);

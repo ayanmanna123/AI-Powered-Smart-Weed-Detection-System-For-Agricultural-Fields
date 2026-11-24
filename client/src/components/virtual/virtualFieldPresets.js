@@ -70,7 +70,7 @@ export function createPlantInstance(templateKey, positionCm, lateralOffset = 0) 
     label: tpl.label,
     sampleImage: tpl.sampleImage,
     positionCm: Number(positionCm.toFixed(1)),
-    lateralOffset: Number(Math.max(-0.85, Math.min(0.85, lateralOffset)).toFixed(2)),
+    lateralOffset: Number(Math.max(-1, Math.min(1, lateralOffset)).toFixed(2)),
     status: "pending", // pending | scanned | sprayed | protected
   };
 }

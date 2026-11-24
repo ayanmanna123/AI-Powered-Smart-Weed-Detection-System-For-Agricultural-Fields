@@ -438,7 +438,7 @@ export function VirtualEnvironmentPage({
                 }
               }
 
-              const estLat = Math.max(-0.85, Math.min(0.85, ((d.norm_x * 512 - 70) / (512 - 140)) * 2 - 1));
+              const estLat = Math.max(-1, Math.min(1, ((d.norm_x * 512 - 70) / (512 - 140)) * 2 - 1));
               const estCm = Math.max(
                 zoneStart,
                 Math.min(zoneEnd, zoneEnd - ((d.norm_y * 512 - 60) / (512 - 120)) * span)
