@@ -8,6 +8,7 @@ import {
   ArrowDown,
   MoveHorizontal,
   ScanLine,
+  LocateFixed,
 } from "lucide-react";
 
 /**
@@ -41,12 +42,54 @@ export function VirtualFieldTrack({
 }) {
   const trackRef = useRef(null);
   const botRef = useRef(null);
+  const programmaticScrollRef = useRef(false);
+  const expectedScrollYRef = useRef(0);
   const [draggingPlantId, setDraggingPlantId] = useState(null);
   const [hoverPos, setHoverPos] = useState(null);
+  const [autoScrollPaused, setAutoScrollPaused] = useState(false);
 
-  // Smoothly keep the rover centered as it starts at 0 cm (bottom) and drives upward
+  const handleResumeAutoScroll = () => {
+    setAutoScrollPaused(false);
+    if (botRef.current) {
+      programmaticScrollRef.current = true;
+      botRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+      setTimeout(() => {
+        programmaticScrollRef.current = false;
+        expectedScrollYRef.current = window.scrollY;
+      }, 450);
+    }
+  };
+
+  // Smoothly keep the rover centered as it starts at 0 cm (bottom) and drives upward;
+  // immediately yield if the user scrolls manually so they never fight the viewport.
   useEffect(() => {
-    if (!isLocked) return;
+    if (!isLocked || autoScrollPaused) return;
+
+    const pauseOnUserInterrupt = () => {
+      setAutoScrollPaused(true);
+    };
+
+    const handleScroll = () => {
+      if (programmaticScrollRef.current) return;
+      if (Math.abs(window.scrollY - expectedScrollYRef.current) > 24) {
+        setAutoScrollPaused(true);
+      }
+    };
+
+    const handleKeyDown = (e) => {
+      if (
+        ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(e.key) &&
+        e.target.tagName !== "INPUT" &&
+        e.target.tagName !== "TEXTAREA"
+      ) {
+        setAutoScrollPaused(true);
+      }
+    };
+
+    window.addEventListener("wheel", pauseOnUserInterrupt, { passive: true });
+    window.addEventListener("touchmove", pauseOnUserInterrupt, { passive: true });
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    window.addEventListener("keydown", handleKeyDown);
 
     let rafId = null;
     const followBot = () => {
@@ -65,7 +108,12 @@ export function VirtualFieldTrack({
             0,
             Math.min(maxScroll, window.scrollY + delta * 0.08)
           );
+          programmaticScrollRef.current = true;
+          expectedScrollYRef.current = nextY;
           window.scrollTo({ top: nextY, behavior: "auto" });
+          requestAnimationFrame(() => {
+            programmaticScrollRef.current = false;
+          });
         }
       }
       rafId = requestAnimationFrame(followBot);
@@ -74,8 +122,12 @@ export function VirtualFieldTrack({
     rafId = requestAnimationFrame(followBot);
     return () => {
       if (rafId) cancelAnimationFrame(rafId);
+      window.removeEventListener("wheel", pauseOnUserInterrupt);
+      window.removeEventListener("touchmove", pauseOnUserInterrupt);
+      window.removeEventListener("scroll", handleScroll);
+      window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isLocked]);
+  }, [isLocked, autoScrollPaused]);
 
   // Base minimum height so column 3 defines total height and columns 1 & 2 stretch cleanly to match
   const trackHeightPx = trackLengthCm <= 60 ? 680 : trackLengthCm >= 120 ? 840 : 760;
@@ -180,9 +232,28 @@ export function VirtualFieldTrack({
             Step: <strong className="text-zinc-200">10 cm</strong>
           </span>
         </div>
-        <div className="text-zinc-400">
+        <div className="flex items-center gap-2 text-zinc-400">
           {isLocked ? (
-            <span className="text-amber-400">Simulation running — editing locked</span>
+            autoScrollPaused ? (
+              <button
+                type="button"
+                onClick={handleResumeAutoScroll}
+                className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-bold transition-colors"
+              >
+                <LocateFixed className="size-3" />
+                <span>Resume Auto-Scroll</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setAutoScrollPaused(true)}
+                title="Click to pause auto-scroll"
+                className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 transition-colors"
+              >
+                <LocateFixed className="size-3 animate-pulse" />
+                <span>Auto-Scroll ON</span>
+              </button>
+            )
           ) : armedTemplate ? (
             <span className="text-emerald-400 animate-pulse">
               Click anywhere on soil row to drop plant
@@ -537,6 +608,18 @@ export function VirtualFieldTrack({
           </div>
         </div>
       </div>
+
+      {/* Floating Resume Auto-Scroll Pill when interrupted by user */}
+      {isLocked && autoScrollPaused && (
+        <button
+          type="button"
+          onClick={handleResumeAutoScroll}
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-mono text-xs font-bold shadow-xl shadow-black/70 border border-emerald-300 transition-transform active:scale-95"
+        >
+          <LocateFixed className="size-4" />
+          <span>Resume Auto-Scroll</span>
+        </button>
+      )}
     </div>
   );
 }
