@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Crosshair,
   Droplets,
@@ -40,8 +40,45 @@ export function VirtualFieldTrack({
   onRemovePlant,
 }) {
   const trackRef = useRef(null);
+  const botRef = useRef(null);
   const [draggingPlantId, setDraggingPlantId] = useState(null);
   const [hoverPos, setHoverPos] = useState(null);
+
+  // Smoothly keep the rover centered as it starts at 0 cm (bottom) and drives upward
+  useEffect(() => {
+    if (!isLocked) return;
+
+    let rafId = null;
+    const followBot = () => {
+      if (botRef.current) {
+        const rect = botRef.current.getBoundingClientRect();
+        const botCenterY = rect.top + rect.height / 2;
+        const desiredViewportY = window.innerHeight * 0.56;
+        const delta = botCenterY - desiredViewportY;
+
+        if (Math.abs(delta) > 2) {
+          const maxScroll = Math.max(
+            0,
+            document.documentElement.scrollHeight - window.innerHeight
+          );
+          const nextY = Math.max(
+            0,
+            Math.min(maxScroll, window.scrollY + delta * 0.08)
+          );
+          window.scrollTo({ top: nextY, behavior: "auto" });
+        }
+      }
+      rafId = requestAnimationFrame(followBot);
+    };
+
+    rafId = requestAnimationFrame(followBot);
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [isLocked]);
+
+  // Base minimum height so column 3 defines total height and columns 1 & 2 stretch cleanly to match
+  const trackHeightPx = trackLengthCm <= 60 ? 680 : trackLengthCm >= 120 ? 840 : 760;
 
   const zonesCount = Math.ceil(trackLengthCm / 10);
   const zones = Array.from({ length: zonesCount }, (_, i) => ({
@@ -132,7 +169,7 @@ export function VirtualFieldTrack({
   const nozzleLeftPct = latToLeftPct(nozzleX);
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex-1 flex flex-col gap-2">
       {/* Track Header Bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
         <div className="flex items-center gap-2">
@@ -156,10 +193,16 @@ export function VirtualFieldTrack({
         </div>
       </div>
 
-      {/* Main Field Track Canvas Container (centered narrow row) */}
-      <div className="relative flex justify-center gap-2 select-none">
+      {/* Main Field Track Canvas Container (stretches to match 3rd column height) */}
+      <div
+        style={{ minHeight: `${trackHeightPx}px` }}
+        className="relative flex-1 flex justify-center gap-2 select-none"
+      >
         {/* Left Distance Ruler (0 cm -> trackLengthCm) */}
-        <div className="w-11 shrink-0 relative h-[600px] sm:h-[640px] flex flex-col justify-between text-[10px] font-mono text-zinc-500 py-0.5">
+        <div
+          style={{ minHeight: `${trackHeightPx}px` }}
+          className="w-11 shrink-0 relative self-stretch flex flex-col justify-between text-[10px] font-mono text-zinc-500 py-0.5"
+        >
           {Array.from({ length: zonesCount + 1 }, (_, idx) => {
             const cm = (zonesCount - idx) * 10;
             return (
@@ -178,7 +221,7 @@ export function VirtualFieldTrack({
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
           onClick={handleTrackClick}
-          className={`relative w-full max-w-[260px] sm:max-w-[290px] h-[600px] sm:h-[640px] rounded-xl border-2 overflow-hidden transition-colors ${
+          className={`relative w-full max-w-[260px] sm:max-w-[290px] self-stretch rounded-xl border-2 overflow-hidden transition-colors ${
             hoverPos
               ? "border-emerald-400 bg-[#281f15]"
               : armedTemplate && !isLocked
@@ -186,6 +229,7 @@ export function VirtualFieldTrack({
               : "border-zinc-800 bg-[#221a12]"
           }`}
           style={{
+            minHeight: `${trackHeightPx}px`,
             backgroundImage:
               "radial-gradient(rgba(255,255,255,0.03) 1px, transparent 0), linear-gradient(to right, rgba(255,255,255,0.025) 1px, transparent 1px)",
             backgroundSize: "18px 18px, 25% 100%",
@@ -381,6 +425,7 @@ export function VirtualFieldTrack({
 
           {/* Wide Straddle 4WD AgriRover Chassis + N20 Lateral Nozzle Rail */}
           <div
+            ref={botRef}
             style={{ bottom: `${nozzleBottomPct}%` }}
             className="absolute inset-x-1 translate-y-1/2 z-30 pointer-events-none"
           >

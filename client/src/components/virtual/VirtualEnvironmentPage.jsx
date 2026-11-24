@@ -1141,10 +1141,10 @@ export function VirtualEnvironmentPage({
       </Card>
 
       {/* Main 3-Column Virtual Field Workspace */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
         {/* LEFT COLUMN (3 cols): Drag-and-Drop Plant Palette + Mission Stats */}
-        <div className="lg:col-span-3 space-y-4">
-          <Card className="border-zinc-800 bg-zinc-950/80">
+        <div className="lg:col-span-3 flex flex-col gap-4">
+          <Card className="border-zinc-800 bg-zinc-950/80 flex-1 flex flex-col">
             <CardHeader className="pb-2">
               <div className="flex items-center justify-between">
                 <CardTitle className="text-xs font-bold text-zinc-100 flex items-center gap-2">
@@ -1157,7 +1157,7 @@ export function VirtualEnvironmentPage({
               </div>
             </CardHeader>
 
-            <CardContent className="space-y-3 pt-1">
+            <CardContent className="space-y-3 pt-1 flex-1 flex flex-col">
               {/* Visual Mode Switch */}
               <div className="flex items-center justify-between text-[10px] font-mono bg-zinc-900/70 p-2 rounded-lg border border-zinc-800">
                 <span className="text-zinc-400">VISUALS:</span>
@@ -1288,7 +1288,7 @@ export function VirtualEnvironmentPage({
               </div>
 
               {/* Draggable Plant Cards Grid */}
-              <div className="max-h-72 overflow-y-auto pr-1 grid grid-cols-2 gap-1.5">
+              <div className="flex-1 min-h-72 max-h-[620px] overflow-y-auto pr-1 grid grid-cols-2 gap-1.5 content-start">
                 {displayedPalette.map((item) => {
                   const isWeed = item.type === "weed";
                   const isArmed = armedTemplate?.key === item.key;
@@ -1558,9 +1558,9 @@ export function VirtualEnvironmentPage({
         </div>
 
         {/* CENTER COLUMN (5 cols): Interactive 1D Straight-Line Field Track */}
-        <div className="lg:col-span-5">
-          <Card className="border-zinc-800 bg-zinc-950/80">
-            <CardContent className="p-3 sm:p-4">
+        <div className="lg:col-span-5 flex flex-col">
+          <Card className="border-zinc-800 bg-zinc-950/80 flex-1 flex flex-col">
+            <CardContent className="p-3 sm:p-4 flex-1 flex flex-col">
               <VirtualFieldTrack
                 trackLengthCm={trackLengthCm}
                 plants={plants}
