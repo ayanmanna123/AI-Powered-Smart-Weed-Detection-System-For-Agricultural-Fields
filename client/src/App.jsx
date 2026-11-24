@@ -4,8 +4,7 @@ import {
   Activity,
   Terminal as TerminalIcon,
   Radio,
-  Sliders,
-  Sparkles,
+  Bot,
 } from "lucide-react";
 
 import { DEFAULT_CONFIG } from "@/config/robotConfig";
@@ -24,6 +23,7 @@ import { LiveCameraFeed } from "@/components/telemetry/LiveCameraFeed";
 import { WeedAnalyticsCard } from "@/components/telemetry/WeedAnalyticsCard";
 import { CommandConsole } from "@/components/terminal/CommandConsole";
 import { ConnectionSettingsModal } from "@/components/settings/ConnectionSettingsModal";
+import { VirtualEnvironmentPage } from "@/components/virtual/VirtualEnvironmentPage";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -39,9 +39,19 @@ export default function App() {
     return Number(localStorage.getItem("agri_rover_http_port")) || DEFAULT_CONFIG.httpPort;
   });
 
-  const [activeTab, setActiveTab] = useState("cockpit"); // cockpit, analytics, terminal
+  const [activeTab, setActiveTab] = useState(() => {
+    const hash = typeof window !== "undefined" ? window.location.hash.replace("#", "") : "";
+    if (["cockpit", "virtual", "analytics", "terminal"].includes(hash)) return hash;
+    return "cockpit";
+  }); // cockpit, virtual, analytics, terminal
   const [controlMode, setControlMode] = useState("both"); // joystick, dpad, both
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.history.replaceState(null, "", `#${activeTab}`);
+    }
+  }, [activeTab]);
 
   // WebSocket Manager
   const {
@@ -84,7 +94,7 @@ export default function App() {
     onStop: stopRover,
     onEmergencyStop: emergencyStop,
     onN20Control: handleN20Control,
-    enabled: true,
+    enabled: activeTab !== "virtual",
   });
 
   // Save Settings
@@ -126,6 +136,19 @@ export default function App() {
             >
               <Gamepad2 className="size-3.5" />
               <span>ROVER COCKPIT</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab("virtual")}
+              className={`flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                activeTab === "virtual"
+                  ? "bg-emerald-500 text-zinc-950 shadow-md font-bold"
+                  : "text-zinc-400 hover:text-white hover:bg-zinc-800"
+              }`}
+            >
+              <Bot className="size-3.5" />
+              <span>VIRTUAL DEMO</span>
             </button>
 
             <button
@@ -265,7 +288,17 @@ export default function App() {
           </div>
         )}
 
-        {/* TAB 2: AI VISION & FIELD ANALYTICS */}
+        {/* TAB 2: VIRTUAL ENVIRONMENT SIMULATOR */}
+        {activeTab === "virtual" && (
+          <VirtualEnvironmentPage
+            isWsConnected={isWsConnected}
+            onDriveStep={(dir) => (dir === "STOP" ? stopRover() : handleDPadPress(dir))}
+            onN20Step={(dir, speed) => handleN20Control(dir, speed, true)}
+            onEmergencyStop={emergencyStop}
+          />
+        )}
+
+        {/* TAB 3: AI VISION & FIELD ANALYTICS */}
         {activeTab === "analytics" && (
           <div className="space-y-5">
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
