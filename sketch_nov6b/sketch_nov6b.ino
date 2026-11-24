@@ -1,5 +1,6 @@
-﻿#include <ESP8266WiFi.h>
+#include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
+#include <WebSocketsServer.h>
 #include <SoftwareSerial.h>
 #include "webpage.h"
 
@@ -20,6 +21,7 @@
 SoftwareSerial unoSerial(D6, D5);
 
 ESP8266WebServer server(80);
+WebSocketsServer webSocket = WebSocketsServer(81);
 
 const char* ssid = "aniket_4g";
 const char* password = "kolkata2003";
@@ -30,133 +32,14 @@ const char* password = "kolkata2003";
 // Rear-Left (RL)   = Motor 2
 // Rear-Right (RR)  = Motor 1
 
-// Webpage dashboard HTML/CSS/JavaScript is separated into webpage.h
-
-
-void handleRoot() {
-  Serial.println("[HTTP] Client connected -> Serving RC Rover Pro Dashboard");
-  server.send_P(200, "text/html", webpage);
-}
-
-// Single motor endpoint: /cmd?m=1&s=200&d=F
-void handleCommand() {
-  if (!server.hasArg("m") ||
-      !server.hasArg("s") ||
-      !server.hasArg("d")) {
-    Serial.println("[ERROR] /cmd called with missing arguments");
-    server.send(400, "text/plain", "Missing arguments");
-    return;
-  }
-
-  int motor = server.arg("m").toInt();
-  int speed = server.arg("s").toInt();
-  String dir = server.arg("d");
-
-  if (motor < 1 || motor > 4 ||
-      speed < 0 || speed > 255 ||
-      (dir != "F" && dir != "R")) {
-    Serial.printf("[ERROR] Invalid command params: m=%d, s=%d, d=%s\n", motor, speed, dir.c_str());
-    server.send(400, "text/plain", "Invalid command");
-    return;
-  }
-
-  String cmd = "M" + String(motor) + "," + String(speed) + "," + dir;
-  unoSerial.println(cmd);
-
-  Serial.print("[CMD -> UNO] ");
-  Serial.println(cmd);
-
-  server.send(200, "text/plain", "OK: " + cmd);
-}
-
-// Helper: send a single motor command to UNO and wait until UNO finishes
-// processing/printing (or replies with '\n', up to 70ms max) so UNO SoftwareSerial
-// never drops M2 and M1 while busy with M4 and M3.
-void sendMotorToUno(int motor, int speed, const String& dir) {
-  while (unoSerial.available()) {
-    unoSerial.read();
-  }
-
-  unoSerial.printf("M%d,%d,%s\n", motor, speed, dir.c_str());
-  unoSerial.flush();
-
-  unsigned long start = millis();
-  while (millis() - start < 35) {
-    if (unoSerial.available()) {
-      char c = unoSerial.read();
-      if (c == '\n') {
-        delay(2);
-        break;
-      }
-    }
-    yield();
-  }
-}
-
-// Robust stop sequence to ensure Arduino Uno receives and executes the stop command
-void sendStopToUno() {
-  while (unoSerial.available()) {
-    unoSerial.read();
-  }
-  // Send multiple STOP signals with small delay to prevent SoftwareSerial packet drops
-  unoSerial.println("STOP");
-  delay(10);
-  unoSerial.println("STOP");
-  delay(10);
-  unoSerial.println("M1,0,F");
-  delay(4);
-  unoSerial.println("M2,0,F");
-  delay(4);
-  unoSerial.println("M3,0,F");
-  delay(4);
-  unoSerial.println("M4,0,F");
-  delay(4);
-  unoSerial.println("STOP");
-  unoSerial.flush();
-}
-
-// Synchronized 4-wheel car drive endpoint:
-// /drive?s1=200&d1=F&s2=200&d2=F&s3=200&d3=F&s4=200&d4=F
-// Motor 4 = Front-Left, Motor 3 = Front-Right, Motor 2 = Rear-Left, Motor 1 = Rear-Right
-void handleDrive() {
-  int s1 = constrain(server.arg("s1").toInt(), 0, 255);
-  int s2 = constrain(server.arg("s2").toInt(), 0, 255);
-  int s3 = constrain(server.arg("s3").toInt(), 0, 255);
-  int s4 = constrain(server.arg("s4").toInt(), 0, 255);
-
-  // If all speeds are zero, route directly to stopAll for an immediate complete shutdown
-  if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 0) {
-    sendStopToUno();
-    Serial.println("[CAR -> UNO] ALL STOPPED (Speed = 0)");
-    server.send(200, "text/plain", "ALL MOTORS STOPPED");
-    return;
-  }
-
-  String d1 = server.arg("d1") == "R" ? "R" : "F";
-  String d2 = server.arg("d2") == "R" ? "R" : "F";
-  String d3 = server.arg("d3") == "R" ? "R" : "F";
-  String d4 = server.arg("d4") == "R" ? "R" : "F";
-
-  // Send all 4 motor commands cleanly to Arduino UNO with handshake timing
-  // Front-Left (M4), Front-Right (M3), Rear-Left (M2), Rear-Right (M1)
-  sendMotorToUno(4, s4, d4);
-  sendMotorToUno(3, s3, d3);
-  sendMotorToUno(2, s2, d2);
-  sendMotorToUno(1, s1, d1);
-
-  Serial.printf("[CAR -> UNO] FL(M4):%d%s | FR(M3):%d%s | RL(M2):%d%s | RR(M1):%d%s\n",
-                s4, d4.c_str(), s3, d3.c_str(), s2, d2.c_str(), s1, d1.c_str());
-
-  server.send(200, "text/plain", "DRIVE OK");
-}
-
-// =========================================================
-// TB6612FNG & N20 MOTOR HARDWARE CONTROL FUNCTIONS
-// =========================================================
+// TB6612FNG State Variables
 int n20Speed = 180;
 bool n20PowerState = true;
 String n20Direction = "STOP";
 
+// =========================================================
+// TB6612FNG & N20 MOTOR HARDWARE CONTROL FUNCTIONS
+// =========================================================
 void initTB6612FNG() {
   pinMode(PIN_PWMA, OUTPUT);
   pinMode(PIN_AIN1, OUTPUT);
@@ -194,13 +77,13 @@ void controlN20Motor(const String& dir, int speed, bool power) {
   speed = constrain(speed, 0, 255);
   n20Speed = speed;
 
-  if (dir == "F" || dir == "FWD" || dir == "FORWARD") {
+  if (dir == "F" || dir == "FWD" || dir == "FORWARD" || dir == "UP") {
     digitalWrite(PIN_AIN1, HIGH);
     digitalWrite(PIN_AIN2, LOW);
     analogWrite(PIN_PWMA, speed);
     n20Direction = "FORWARD";
     Serial.printf("[N20 MOTOR] FORWARD | Speed: %d (PWMA: D1, AIN1: D2=HIGH, AIN2: D4=LOW)\n", speed);
-  } else if (dir == "B" || dir == "R" || dir == "REV" || dir == "BACKWARD") {
+  } else if (dir == "B" || dir == "R" || dir == "REV" || dir == "BACKWARD" || dir == "DOWN") {
     digitalWrite(PIN_AIN1, LOW);
     digitalWrite(PIN_AIN2, HIGH);
     analogWrite(PIN_PWMA, speed);
@@ -215,9 +98,225 @@ void controlN20Motor(const String& dir, int speed, bool power) {
   }
 }
 
-// Endpoint: /n20?dir=F&speed=180&power=1
-// Also supports /n20?action=forward / backward / stop / on / off
+// Fast, non-blocking motor send to UNO with 2ms pacing
+void sendMotorToUno(int motor, int speed, const String& dir) {
+  unoSerial.printf("M%d,%d,%s\n", motor, speed, dir.c_str());
+  delay(2);
+}
+
+// Rapid stop sequence to immediately halt Arduino Uno
+void sendStopToUno() {
+  unoSerial.println("STOP");
+  delay(3);
+  unoSerial.println("STOP");
+}
+
+// =========================================================
+// WEBSOCKET PROTOCOL HANDLER (PORT 81)
+// Ultra-low latency communication for the React Cockpit
+// =========================================================
+void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
+  switch (type) {
+    case WStype_DISCONNECTED:
+      Serial.printf("[WS] Client #%u Disconnected\n", num);
+      break;
+
+    case WStype_CONNECTED: {
+      IPAddress ip = webSocket.remoteIP(num);
+      Serial.printf("[WS] Client #%u Connected from %d.%d.%d.%d\n", num, ip[0], ip[1], ip[2], ip[3]);
+      webSocket.sendTXT(num, "CONNECTED: AgriRover Pro Online");
+      break;
+    }
+
+    case WStype_TEXT: {
+      String msg = String((char*)payload);
+      msg.trim();
+
+      // 1. Latency Ping-Pong Check
+      if (msg == "PING") {
+        webSocket.sendTXT(num, "PONG");
+        return;
+      }
+
+      // 2. Chassis Rover Drive Command: DRIVE:s1,d1,s2,d2,s3,d3,s4,d4
+      // s1..s4 = Motor speeds (0-255), d1..d4 = Direction ('F' or 'R')
+      // M1=RR, M2=RL, M3=FR, M4=FL
+      if (msg.startsWith("DRIVE:")) {
+        String params = msg.substring(6);
+        int s[4] = {0, 0, 0, 0};
+        String d[4] = {"F", "F", "F", "F"};
+        int idx = 0;
+        int startIdx = 0;
+
+        for (unsigned int i = 0; i <= params.length(); i++) {
+          if (i == params.length() || params[i] == ',') {
+            String token = params.substring(startIdx, i);
+            token.trim();
+            if (idx % 2 == 0 && (idx / 2) < 4) {
+              s[idx / 2] = constrain(token.toInt(), 0, 255);
+            } else if (idx % 2 == 1 && (idx / 2) < 4) {
+              d[idx / 2] = (token == "R") ? "R" : "F";
+            }
+            idx++;
+            startIdx = i + 1;
+          }
+        }
+
+        if (s[0] == 0 && s[1] == 0 && s[2] == 0 && s[3] == 0) {
+          sendStopToUno();
+        } else {
+          sendMotorToUno(4, s[3], d[3]); // Front-Left
+          sendMotorToUno(3, s[2], d[2]); // Front-Right
+          sendMotorToUno(2, s[1], d[1]); // Rear-Left
+          sendMotorToUno(1, s[0], d[0]); // Rear-Right
+        }
+        webSocket.sendTXT(num, "ACK:DRIVE");
+        return;
+      }
+
+      // 3. Stop Chassis Rover
+      if (msg == "STOP" || msg == "S") {
+        sendStopToUno();
+        webSocket.sendTXT(num, "ACK:STOP");
+        return;
+      }
+
+      // 4. Emergency Stop: Stop Rover and N20 Motor
+      if (msg == "ESTOP" || msg == "EMERGENCY") {
+        sendStopToUno();
+        controlN20Motor("STOP", 0, n20PowerState);
+        webSocket.sendTXT(num, "ACK:ESTOP");
+        return;
+      }
+
+      // 5. N20 Motor Control: N20:DIR,SPEED,POWER (e.g. N20:FORWARD,220,1)
+      if (msg.startsWith("N20:")) {
+        String params = msg.substring(4);
+        int c1 = params.indexOf(',');
+        int c2 = params.indexOf(',', c1 + 1);
+
+        String dir = (c1 > 0) ? params.substring(0, c1) : params;
+        dir.toUpperCase();
+        int speed = n20Speed;
+        bool pwr = n20PowerState;
+
+        if (c1 > 0) {
+          if (c2 > 0) {
+            speed = constrain(params.substring(c1 + 1, c2).toInt(), 0, 255);
+            pwr = (params.substring(c2 + 1).toInt() != 0);
+          } else {
+            speed = constrain(params.substring(c1 + 1).toInt(), 0, 255);
+          }
+        }
+
+        controlN20Motor(dir, speed, pwr);
+        String ackN20 = "ACK:N20:" + dir + ":" + String(speed);
+        webSocket.sendTXT(num, ackN20);
+        return;
+      }
+
+      // 6. Telemetry Query
+      if (msg == "STATUS" || msg == "TELEM") {
+        String statusJson = "STATUS:{\"rssi\":" + String(WiFi.RSSI()) +
+                            ",\"heap\":" + String(ESP.getFreeHeap()) +
+                            ",\"uptime\":" + String(millis() / 1000) +
+                            ",\"n20Dir\":\"" + n20Direction + "\"" +
+                            ",\"n20Speed\":" + String(n20Speed) +
+                            ",\"n20Power\":" + String(n20PowerState ? "true" : "false") + "}";
+        webSocket.sendTXT(num, statusJson);
+        return;
+      }
+
+      // 7. Generic Raw Uno forwarding
+      if (msg.startsWith("UNO:")) {
+        String raw = msg.substring(4);
+        unoSerial.println(raw);
+        String ackUno = "ACK:UNO:" + raw;
+        webSocket.sendTXT(num, ackUno);
+        return;
+      }
+
+      break;
+    }
+
+    default:
+      break;
+  }
+}
+
+// =========================================================
+// HTTP REST ENDPOINTS (PORT 80)
+// Fallback and internal webpage support with CORS enabled
+// =========================================================
+void handleRoot() {
+  Serial.println("[HTTP] Client connected -> Serving RC Rover Pro Dashboard");
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.send_P(200, "text/html", webpage);
+}
+
+void handleStatus() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  String json = "{";
+  json += "\"status\":\"OK\",";
+  json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
+  json += "\"freeHeap\":" + String(ESP.getFreeHeap()) + ",";
+  json += "\"uptime\":" + String(millis() / 1000) + ",";
+  json += "\"n20Power\":" + String(n20PowerState ? "true" : "false") + ",";
+  json += "\"n20Dir\":\"" + n20Direction + "\",";
+  json += "\"n20Speed\":" + String(n20Speed);
+  json += "}";
+  server.send(200, "application/json", json);
+}
+
+void handleCommand() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  if (!server.hasArg("m") || !server.hasArg("s") || !server.hasArg("d")) {
+    server.send(400, "text/plain", "Missing arguments");
+    return;
+  }
+
+  int motor = server.arg("m").toInt();
+  int speed = server.arg("s").toInt();
+  String dir = server.arg("d");
+
+  if (motor < 1 || motor > 4 || speed < 0 || speed > 255 || (dir != "F" && dir != "R")) {
+    server.send(400, "text/plain", "Invalid command");
+    return;
+  }
+
+  String cmd = "M" + String(motor) + "," + String(speed) + "," + dir;
+  unoSerial.println(cmd);
+  server.send(200, "text/plain", "OK: " + cmd);
+}
+
+void handleDrive() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  int s1 = constrain(server.arg("s1").toInt(), 0, 255);
+  int s2 = constrain(server.arg("s2").toInt(), 0, 255);
+  int s3 = constrain(server.arg("s3").toInt(), 0, 255);
+  int s4 = constrain(server.arg("s4").toInt(), 0, 255);
+
+  if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 0) {
+    sendStopToUno();
+    server.send(200, "text/plain", "ALL MOTORS STOPPED");
+    return;
+  }
+
+  String d1 = server.arg("d1") == "R" ? "R" : "F";
+  String d2 = server.arg("d2") == "R" ? "R" : "F";
+  String d3 = server.arg("d3") == "R" ? "R" : "F";
+  String d4 = server.arg("d4") == "R" ? "R" : "F";
+
+  sendMotorToUno(4, s4, d4);
+  sendMotorToUno(3, s3, d3);
+  sendMotorToUno(2, s2, d2);
+  sendMotorToUno(1, s1, d1);
+
+  server.send(200, "text/plain", "DRIVE OK");
+}
+
 void handleN20() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
   bool power = n20PowerState;
   if (server.hasArg("power")) {
     int p = server.arg("power").toInt();
@@ -245,6 +344,34 @@ void handleN20() {
   server.send(200, "text/plain", resp);
 }
 
+void handleStopAll() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  sendStopToUno();
+  if (server.hasArg("all")) {
+    controlN20Motor("STOP", 0, n20PowerState);
+    Serial.println("[CMD -> UNO] EMERGENCY STOP (All 4 wheels & N20 motor stopped)");
+  } else {
+    Serial.println("[CMD -> UNO] STOP (All 4 wheels stopped)");
+  }
+  server.send(200, "text/plain", "All motors stopped");
+}
+
+void handleOptions() {
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.sendHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+  server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+  server.send(200, "text/plain", "OK");
+}
+
+void handleNotFound() {
+  if (server.uri() == "/favicon.ico") {
+    server.send(204, "text/plain", "");
+    return;
+  }
+  server.sendHeader("Access-Control-Allow-Origin", "*");
+  server.send(404, "text/plain", "Not found");
+}
+
 void processSerialN20Command(String cmd) {
   cmd.trim();
   cmd.toUpperCase();
@@ -266,7 +393,7 @@ void processSerialN20Command(String cmd) {
     cmd.trim();
   }
 
-  if (cmd.startsWith("FWD") || cmd.startsWith("F")) {
+  if (cmd.startsWith("FWD") || cmd.startsWith("F") || cmd.startsWith("UP")) {
     int spd = n20Speed;
     int spaceIdx = cmd.indexOf(' ');
     if (spaceIdx > 0) {
@@ -274,7 +401,7 @@ void processSerialN20Command(String cmd) {
       if (parsed > 0) spd = parsed;
     }
     controlN20Motor("FORWARD", spd, true);
-  } else if (cmd.startsWith("REV") || cmd.startsWith("B") || cmd.startsWith("R")) {
+  } else if (cmd.startsWith("REV") || cmd.startsWith("B") || cmd.startsWith("R") || cmd.startsWith("DOWN")) {
     int spd = n20Speed;
     int spaceIdx = cmd.indexOf(' ');
     if (spaceIdx > 0) {
@@ -304,27 +431,6 @@ void processSerialN20Command(String cmd) {
   }
 }
 
-void handleStopAll() {
-  sendStopToUno();
-  if (server.hasArg("all")) {
-    controlN20Motor("STOP", 0, n20PowerState);
-    Serial.println("[CMD -> UNO] EMERGENCY STOP (All 4 wheels & N20 motor stopped)");
-  } else {
-    Serial.println("[CMD -> UNO] STOP (All 4 wheels stopped)");
-  }
-  server.send(200, "text/plain", "All motors stopped");
-}
-
-void handleNotFound() {
-  if (server.uri() == "/favicon.ico") {
-    server.send(204, "text/plain", "");
-    return;
-  }
-  Serial.print("[HTTP 404] Unknown path: ");
-  Serial.println(server.uri());
-  server.send(404, "text/plain", "Not found");
-}
-
 void setup() {
   Serial.begin(115200);
   Serial.setTimeout(20);
@@ -341,16 +447,16 @@ void setup() {
 
   Serial.println();
   Serial.println("==========================================");
-  Serial.println("Starting ESP8266 RC Rover Pro Dashboard...");
-  Serial.println("Front: M4 (Left), M3 (Right)");
-  Serial.println("Rear:  M2 (Left), M1 (Right)");
-  Serial.println("N20 Motor (TB6612FNG): D1, D2, D4, D7");
+  Serial.println("Starting AgriRover Pro Dual Protocol Hub...");
+  Serial.println("  Port 80: HTTP REST API & Webpage");
+  Serial.println("  Port 81: High-Speed WebSockets");
   Serial.println("==========================================");
 
-  // Clear previous AP settings and connect to Wi-Fi router
+  // Wi-Fi Connection with High Performance (Disable Modem Sleep to keep ping under 5ms)
   WiFi.persistent(false);
   WiFi.disconnect(true);
   WiFi.mode(WIFI_STA);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
   WiFi.setAutoReconnect(true);
 
   Serial.print("Connecting to Wi-Fi SSID: ");
@@ -385,33 +491,67 @@ void setup() {
   Serial.println(WiFi.localIP());
   Serial.println("------------------------------------------");
 
+  // HTTP Routes with CORS
+  server.enableCORS(true);
   server.on("/", handleRoot);
+  server.on("/status", handleStatus);
   server.on("/cmd", handleCommand);
   server.on("/drive", handleDrive);
   server.on("/stopall", handleStopAll);
   server.on("/n20", handleN20);
+  server.on("/drive", HTTP_OPTIONS, handleOptions);
+  server.on("/stopall", HTTP_OPTIONS, handleOptions);
+  server.on("/n20", HTTP_OPTIONS, handleOptions);
   server.onNotFound(handleNotFound);
-
   server.begin();
-  Serial.println("RC Rover Pro Web Server Started!");
-  Serial.print("Open this URL in your browser: http://");
+
+  // WebSocket Server on Port 81
+  webSocket.begin();
+  webSocket.onEvent(webSocketEvent);
+
+  Serial.println("AgriRover Pro Servers Ready:");
+  Serial.print("  HTTP Dashboard:   http://");
   Serial.println(WiFi.localIP());
+  Serial.print("  WebSocket Stream: ws://");
+  Serial.print(WiFi.localIP());
+  Serial.println(":81");
+  Serial.println("==========================================");
 }
 
 void loop() {
   server.handleClient();
+  webSocket.loop();
 
-  // If Arduino Uno sends any feedback over serial, print it to Serial Monitor
+  // Forward Arduino Uno Serial feedback to WebSockets & Serial Monitor
   if (unoSerial.available()) {
     String unoMsg = unoSerial.readStringUntil('\n');
     unoMsg.trim();
-    if (unoMsg.length() > 0) {
+    // Filter out internal "K" ACK to prevent flooding WebSockets with 100 packets/sec
+    if (unoMsg.length() > 0 && unoMsg != "K") {
       Serial.print("[UNO -> ESP] ");
       Serial.println(unoMsg);
+      // Stream Uno log to connected React clients
+      String broadcastUno = "[UNO] " + unoMsg;
+      webSocket.broadcastTXT(broadcastUno);
     }
   }
 
-  // Also support testing N20 motor directly from USB Serial Monitor
+  // Periodic Telemetry Heartbeat Broadcast (every 1500ms)
+  static unsigned long lastTelemetry = 0;
+  if (millis() - lastTelemetry > 1500) {
+    lastTelemetry = millis();
+    if (webSocket.connectedClients() > 0) {
+      String telemJson = "TELEMETRY:{\"rssi\":" + String(WiFi.RSSI()) +
+                         ",\"heap\":" + String(ESP.getFreeHeap()) +
+                         ",\"uptime\":" + String(millis() / 1000) +
+                         ",\"n20Dir\":\"" + n20Direction + "\"" +
+                         ",\"n20Speed\":" + String(n20Speed) +
+                         ",\"n20Power\":" + String(n20PowerState ? "true" : "false") + "}";
+      webSocket.broadcastTXT(telemJson);
+    }
+  }
+
+  // Support direct Serial Monitor commands for debugging
   if (Serial.available()) {
     String serCmd = Serial.readStringUntil('\n');
     serCmd.trim();
