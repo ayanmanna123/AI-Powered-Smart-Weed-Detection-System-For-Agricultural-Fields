@@ -98,16 +98,16 @@ void controlN20Motor(const String& dir, int speed, bool power) {
   }
 }
 
-// Fast, non-blocking motor send to UNO with 2ms pacing
+// Paced motor send to UNO (prevents SoftwareSerial RX collisions at 9600 baud)
 void sendMotorToUno(int motor, int speed, const String& dir) {
   unoSerial.printf("M%d,%d,%s\n", motor, speed, dir.c_str());
-  delay(2);
+  delay(15);
 }
 
 // Rapid stop sequence to immediately halt Arduino Uno
 void sendStopToUno() {
   unoSerial.println("STOP");
-  delay(3);
+  delay(15);
   unoSerial.println("STOP");
 }
 

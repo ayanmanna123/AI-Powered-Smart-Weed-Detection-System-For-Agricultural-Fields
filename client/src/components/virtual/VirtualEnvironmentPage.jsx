@@ -64,9 +64,9 @@ export function VirtualEnvironmentPage({
   const [visualMode, setVisualMode] = useState("dataset"); // "dataset" | "schematic"
   const [speedMultiplier, setSpeedMultiplier] = useState(1);
 
-  // Real hardware sync
+  // Real hardware sync (10 cm == 2000 ms / 2 sec conversion by default)
   const [mirrorRealBot, setMirrorRealBot] = useState(false);
-  const [pulseMsPer10Cm, setPulseMsPer10Cm] = useState(450);
+  const [pulseMsPer10Cm, setPulseMsPer10Cm] = useState(2000);
 
   // YOLO backend state
   const [yoloServerUrl, setYoloServerUrl] = useState(DEFAULT_YOLO_SERVER_URL);
@@ -113,7 +113,7 @@ export function VirtualEnvironmentPage({
   const pausedRef = useRef(false);
   const speedRef = useRef(1);
   const mirrorRef = useRef(false);
-  const pulseMsRef = useRef(450);
+  const pulseMsRef = useRef(2000);
   const yoloUrlRef = useRef(yoloServerUrl);
   const yoloConfRef = useRef(yoloConf);
   const visualModeRef = useRef(visualMode);
@@ -126,8 +126,8 @@ export function VirtualEnvironmentPage({
   }, [speedMultiplier]);
 
   useEffect(() => {
-    mirrorRef.current = mirrorRealBot && isWsConnected;
-  }, [mirrorRealBot, isWsConnected]);
+    mirrorRef.current = mirrorRealBot;
+  }, [mirrorRealBot]);
 
   useEffect(() => {
     pulseMsRef.current = pulseMsPer10Cm;
@@ -182,49 +182,25 @@ export function VirtualEnvironmentPage({
     setNozzleX(nextNozzleX);
   }, []);
 
-  // Sleep helper respecting pause & cancellation
+  // Wall-clock sleep helper respecting pause & cancellation (real-time when mirroring)
   const waitMs = useCallback(async (ms, activeRunId) => {
     let remaining = ms;
+    let lastTick = performance.now();
     while (remaining > 0) {
       if (runIdRef.current !== activeRunId) throw new Error("ABORTED");
       if (pausedRef.current) {
-        await new Promise((r) => setTimeout(r, 60));
+        await new Promise((r) => setTimeout(r, 50));
+        lastTick = performance.now();
         continue;
       }
-      const step = Math.min(30, remaining);
-      await new Promise((r) => setTimeout(r, step / speedRef.current));
-      remaining -= step;
+      await new Promise((r) => setTimeout(r, 25));
+      const now = performance.now();
+      const dt = now - lastTick;
+      lastTick = now;
+      const mult = mirrorRef.current ? 1 : speedRef.current;
+      remaining -= dt * mult;
     }
   }, []);
-
-  // Smoothly animate rover & N20 nozzle to target coordinates
-  const animateTo = useCallback(
-    async (targetBotCm, targetNozzleCm, targetNozzleX, baseDurationMs, activeRunId) => {
-      const start = { ...botPosRef.current };
-      const steps = Math.max(8, Math.round(baseDurationMs / 25));
-
-      for (let i = 1; i <= steps; i++) {
-        if (runIdRef.current !== activeRunId) throw new Error("ABORTED");
-        while (pausedRef.current) {
-          if (runIdRef.current !== activeRunId) throw new Error("ABORTED");
-          await new Promise((r) => setTimeout(r, 60));
-        }
-
-        const t = i / steps;
-        const ease = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-
-        const curBot = start.botCm + (targetBotCm - start.botCm) * ease;
-        const curNozzleY = start.nozzleCm + (targetNozzleCm - start.nozzleCm) * ease;
-        const curNozzleX = start.nozzleX + (targetNozzleX - start.nozzleX) * ease;
-        updateBotPose(curBot, curNozzleY, curNozzleX);
-
-        await new Promise((r) => setTimeout(r, Math.max(12, 25 / speedRef.current)));
-      }
-
-      updateBotPose(targetBotCm, targetNozzleCm, targetNozzleX);
-    },
-    [updateBotPose]
-  );
 
   // Stop all physical actuators safely
   const stopHardwareActuators = useCallback(() => {
@@ -236,6 +212,117 @@ export function VirtualEnvironmentPage({
       onN20Step?.("STOP", 0);
     }
   }, [onDriveStep, onN20Step]);
+
+  // Smooth wall-clock dual-axis animation so Rover (10 cm == pulseMsPer10Cm ms)
+  // and N20 motor each run and stop at their exact independent durations.
+  const animateDualAxis = useCallback(
+    async ({
+      targetBotCm,
+      targetNozzleCm,
+      targetNozzleX,
+      longDurationMs,
+      latDurationMs,
+      longDir = "STOP",
+      latDir = "STOP",
+      activeRunId,
+    }) => {
+      const start = { ...botPosRef.current };
+      const effectiveLongMs = Math.max(0, longDurationMs);
+      const effectiveLatMs = Math.max(0, latDurationMs);
+      const totalMs = Math.max(effectiveLongMs, effectiveLatMs, 40);
+
+      let longStopped = effectiveLongMs === 0 || longDir === "STOP";
+      let latStopped = effectiveLatMs === 0 || latDir === "STOP";
+
+      if (mirrorRef.current) {
+        if (!longStopped) {
+          onDriveStep?.(longDir === "FORWARD" ? "FORWARD" : "BACKWARD");
+        }
+        if (!latStopped) {
+          onN20Step?.(latDir === "RIGHT" ? "FORWARD" : "BACKWARD", 180);
+        }
+      }
+
+      let elapsedLong = 0;
+      let elapsedLat = 0;
+      let lastTick = performance.now();
+
+      while (elapsedLong < effectiveLongMs || elapsedLat < effectiveLatMs) {
+        if (runIdRef.current !== activeRunId) throw new Error("ABORTED");
+
+        if (pausedRef.current) {
+          if (mirrorRef.current) {
+            onDriveStep?.("STOP");
+            onN20Step?.("STOP", 0);
+          }
+          while (pausedRef.current) {
+            if (runIdRef.current !== activeRunId) throw new Error("ABORTED");
+            await new Promise((r) => setTimeout(r, 50));
+          }
+          if (mirrorRef.current) {
+            if (!longStopped) {
+              onDriveStep?.(longDir === "FORWARD" ? "FORWARD" : "BACKWARD");
+            }
+            if (!latStopped) {
+              onN20Step?.(latDir === "RIGHT" ? "FORWARD" : "BACKWARD", 180);
+            }
+          }
+          lastTick = performance.now();
+          continue;
+        }
+
+        await new Promise((r) => setTimeout(r, 20));
+        const now = performance.now();
+        const dt = (now - lastTick) * (mirrorRef.current ? 1 : speedRef.current);
+        lastTick = now;
+
+        elapsedLong = Math.min(effectiveLongMs, elapsedLong + dt);
+        elapsedLat = Math.min(effectiveLatMs, elapsedLat + dt);
+
+        if (!longStopped && elapsedLong >= effectiveLongMs) {
+          longStopped = true;
+          setDriveState("STOP");
+          if (mirrorRef.current) onDriveStep?.("STOP");
+        }
+
+        if (!latStopped && elapsedLat >= effectiveLatMs) {
+          latStopped = true;
+          setN20State("STOP");
+          if (mirrorRef.current) onN20Step?.("STOP", 0);
+        }
+
+        const tLong = effectiveLongMs > 0 ? Math.min(1, elapsedLong / effectiveLongMs) : 1;
+        const tLat = effectiveLatMs > 0 ? Math.min(1, elapsedLat / effectiveLatMs) : 1;
+        const easeLong = mirrorRef.current
+          ? tLong
+          : tLong < 0.5
+          ? 2 * tLong * tLong
+          : 1 - Math.pow(-2 * tLong + 2, 2) / 2;
+        const easeLat = mirrorRef.current
+          ? tLat
+          : tLat < 0.5
+          ? 2 * tLat * tLat
+          : 1 - Math.pow(-2 * tLat + 2, 2) / 2;
+
+        updateBotPose(
+          start.botCm + (targetBotCm - start.botCm) * easeLong,
+          start.nozzleCm + (targetNozzleCm - start.nozzleCm) * easeLong,
+          start.nozzleX + (targetNozzleX - start.nozzleX) * easeLat
+        );
+
+        if (elapsedLong >= totalMs && elapsedLat >= totalMs) break;
+      }
+
+      updateBotPose(targetBotCm, targetNozzleCm, targetNozzleX);
+      setDriveState("STOP");
+      setN20State("STOP");
+      if (mirrorRef.current) {
+        onDriveStep?.("STOP");
+        onN20Step?.("STOP", 0);
+      }
+    },
+    [onDriveStep, onN20Step, updateBotPose]
+  );
 
   // Execute one 10 cm scan-detect-spray cycle
   const executeSingleZone = useCallback(
@@ -249,23 +336,35 @@ export function VirtualEnvironmentPage({
 
       // ------------------------------------------------------------------
       // STEP 1: Move 10 cm Forward along the single-line path
+      // Maintain exact conversion: 10 cm == pulseMsRef.current (default 2000 ms)
       // ------------------------------------------------------------------
       setPhase("MOVE_10CM");
       setDriveState("FORWARD");
       setN20State("STOP");
-      appendLog(`Moving 10 cm forward (${zoneStart} -> ${zoneEnd} cm)...`, "move");
+      const stepCm = Math.max(0.5, zoneEnd - botPosRef.current.botCm);
+      const stepDurationMs = Math.round((stepCm / 10) * pulseMsRef.current);
+      appendLog(
+        `Moving ${stepCm.toFixed(1)} cm forward (${zoneStart} -> ${zoneEnd} cm | ${(
+          stepDurationMs / 1000
+        ).toFixed(2)}s)...`,
+        "move"
+      );
 
-      if (mirrorRef.current) {
-        onDriveStep?.("FORWARD");
-      }
-
-      const travelDuration = mirrorRef.current ? pulseMsRef.current : 750;
-      await animateTo(zoneEnd, checkpointNozzleY, 0, travelDuration, activeRunId);
-
-      setDriveState("STOP");
-      if (mirrorRef.current) {
-        onDriveStep?.("STOP");
-      }
+      await animateDualAxis({
+        targetBotCm: zoneEnd,
+        targetNozzleCm: checkpointNozzleY,
+        targetNozzleX: 0,
+        longDurationMs: stepDurationMs,
+        latDurationMs: Math.abs(botPosRef.current.nozzleX) > 0.02 ? 250 : 0,
+        longDir: "FORWARD",
+        latDir:
+          Math.abs(botPosRef.current.nozzleX) <= 0.02
+            ? "STOP"
+            : botPosRef.current.nozzleX > 0
+            ? "LEFT"
+            : "RIGHT",
+        activeRunId,
+      });
 
       setStats((s) => ({
         ...s,
@@ -421,24 +520,29 @@ export function VirtualEnvironmentPage({
           setDriveState(longDir);
           setN20State(latDir);
 
+          // Maintain 10 cm == pulseMsRef.current (default 2000 ms => 200 ms/cm)
+          const longMs =
+            longDir === "STOP" ? 0 : Math.max(80, Math.round((Math.abs(deltaCm) / 10) * pulseMsRef.current));
+          const latMs = latDir === "STOP" ? 0 : Math.max(120, Math.round(Math.abs(deltaX) * 650));
+
           appendLog(
             `Targeting weed @ ${weed.positionCm.toFixed(1)} cm (X=${Math.round(
               weed.lateralOffset * 100
-            )}%): Rover ${longDir} + N20 ${latDir}`,
+            )}%): Rover ${longDir} (${(longMs / 1000).toFixed(2)}s) + N20 ${latDir}`,
             "target"
           );
 
-          if (mirrorRef.current) {
-            if (longDir !== "STOP") {
-              onDriveStep?.(longDir === "FORWARD" ? "FORWARD" : "BACKWARD");
-            }
-            if (latDir !== "STOP") {
-              onN20Step?.(latDir === "RIGHT" ? "FORWARD" : "BACKWARD", 180);
-            }
-          }
-
           const targetBot = cur.botCm + deltaCm;
-          await animateTo(targetBot, weed.positionCm, weed.lateralOffset, 520, activeRunId);
+          await animateDualAxis({
+            targetBotCm: targetBot,
+            targetNozzleCm: weed.positionCm,
+            targetNozzleX: weed.lateralOffset,
+            longDurationMs: longMs,
+            latDurationMs: latMs,
+            longDir,
+            latDir,
+            activeRunId,
+          });
 
           stopHardwareActuators();
 
@@ -493,27 +597,32 @@ export function VirtualEnvironmentPage({
           setDriveState(realignDrive);
           setN20State(realignN20);
 
-          if (mirrorRef.current) {
-            if (realignDrive !== "STOP") {
-              onDriveStep?.(realignDrive === "FORWARD" ? "FORWARD" : "BACKWARD");
-            }
-            if (realignN20 !== "STOP") {
-              onN20Step?.(realignN20 === "RIGHT" ? "FORWARD" : "BACKWARD", 180);
-            }
-          }
+          const realignLongMs =
+            realignDrive === "STOP"
+              ? 0
+              : Math.max(80, Math.round((Math.abs(zoneEnd - curAfter.botCm) / 10) * pulseMsRef.current));
+          const realignLatMs =
+            realignN20 === "STOP" ? 0 : Math.max(120, Math.round(Math.abs(curAfter.nozzleX) * 650));
 
-          await animateTo(zoneEnd, checkpointNozzleY, 0, 400, activeRunId);
+          await animateDualAxis({
+            targetBotCm: zoneEnd,
+            targetNozzleCm: checkpointNozzleY,
+            targetNozzleX: 0,
+            longDurationMs: realignLongMs,
+            latDurationMs: realignLatMs,
+            longDir: realignDrive,
+            latDir: realignN20,
+            activeRunId,
+          });
           stopHardwareActuators();
         }
       }
     },
     [
       trackLengthCm,
-      animateTo,
+      animateDualAxis,
       waitMs,
       appendLog,
-      onDriveStep,
-      onN20Step,
       stopHardwareActuators,
     ]
   );
@@ -785,33 +894,49 @@ export function VirtualEnvironmentPage({
             {/* Sim Speed */}
             <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-lg p-1">
               <span className="text-[10px] text-zinc-400 px-1">SPEED</span>
-              {[0.5, 1, 2].map((spd) => (
-                <button
-                  key={spd}
-                  type="button"
-                  onClick={() => setSpeedMultiplier(spd)}
-                  className={`px-2 py-0.5 rounded text-[11px] ${
-                    speedMultiplier === spd
-                      ? "bg-sky-500 text-zinc-950 font-bold"
-                      : "text-zinc-400 hover:text-white"
-                  }`}
-                >
-                  {spd}x
-                </button>
-              ))}
+              {mirrorRealBot ? (
+                <span className="px-2 py-0.5 rounded text-[11px] bg-emerald-500/20 text-emerald-300 font-bold">
+                  1x (Real-Time)
+                </span>
+              ) : (
+                [0.5, 1, 2].map((spd) => (
+                  <button
+                    key={spd}
+                    type="button"
+                    onClick={() => setSpeedMultiplier(spd)}
+                    className={`px-2 py-0.5 rounded text-[11px] ${
+                      speedMultiplier === spd
+                        ? "bg-sky-500 text-zinc-950 font-bold"
+                        : "text-zinc-400 hover:text-white"
+                    }`}
+                  >
+                    {spd}x
+                  </button>
+                ))
+              )}
             </div>
 
             {/* Mirror to Real ESP8266 Bot */}
             <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1">
               <Radio
                 className={`size-3.5 ${
-                  mirrorRealBot && isWsConnected ? "text-emerald-400 animate-pulse" : "text-zinc-500"
+                  mirrorRealBot && isWsConnected
+                    ? "text-emerald-400 animate-pulse"
+                    : mirrorRealBot
+                    ? "text-amber-400 animate-pulse"
+                    : "text-zinc-500"
                 }`}
               />
               <span className="text-[11px] text-zinc-300">Mirror Real Bot</span>
               <Switch checked={mirrorRealBot} onCheckedChange={setMirrorRealBot} />
-              {mirrorRealBot && !isWsConnected && (
-                <span className="text-[10px] text-amber-400">(WS Offline)</span>
+              {mirrorRealBot && (
+                <span
+                  className={`text-[10px] ${
+                    isWsConnected ? "text-emerald-400" : "text-amber-400"
+                  }`}
+                >
+                  {isWsConnected ? "(WS Live)" : "(HTTP Fallback)"}
+                </span>
               )}
             </div>
           </div>
@@ -1025,18 +1150,29 @@ export function VirtualEnvironmentPage({
             <Card className="border-emerald-500/30 bg-zinc-950/80">
               <CardContent className="p-3 space-y-2 text-[11px] font-mono">
                 <div className="flex items-center justify-between">
-                  <span className="text-emerald-400 font-bold">10 CM MOTOR PULSE</span>
-                  <span className="text-zinc-200">{pulseMsPer10Cm} ms</span>
+                  <span className="text-emerald-400 font-bold">10 CM MOTOR TIME</span>
+                  <span className="text-zinc-200">
+                    {(pulseMsPer10Cm / 1000).toFixed(1)} s ({Math.round(pulseMsPer10Cm / 10)} ms/cm)
+                  </span>
                 </div>
                 <Slider
                   value={pulseMsPer10Cm}
-                  min={200}
-                  max={1200}
-                  step={50}
+                  min={500}
+                  max={5000}
+                  step={100}
                   onChange={setPulseMsPer10Cm}
                 />
-                <div className="text-[10px] text-zinc-400">
-                  Calibrates how long ESP8266 drives forward for each 10 cm virtual step.
+                <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-400">
+                  <span>10 cm = 2.0 sec runs all 4 motors proportionally.</span>
+                  {pulseMsPer10Cm !== 2000 && (
+                    <button
+                      type="button"
+                      onClick={() => setPulseMsPer10Cm(2000)}
+                      className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 shrink-0"
+                    >
+                      Reset 2.0s
+                    </button>
+                  )}
                 </div>
               </CardContent>
             </Card>

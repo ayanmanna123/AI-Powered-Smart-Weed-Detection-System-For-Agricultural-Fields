@@ -98,9 +98,8 @@ void motorControl(int motor, int speed, char dir) {
   Serial.print(speed == 0 ? 'S' : dir);
   Serial.print(" ");
   Serial.println(speed);
-
-  // Short ACK so ESP8266 knows UNO is ready for the next motor command
-  espSerial.println("K");
+  // Note: Do not transmit on half-duplex SoftwareSerial here, otherwise
+  // consecutive M4..M1 commands from ESP8266 collide with outgoing TX bits.
 }
 
 void stopAll() {
@@ -108,7 +107,6 @@ void stopAll() {
     setMotorPins(m, 0, 'F');
   }
   Serial.println("[STOP] All 4 wheels stopped");
-  espSerial.println("K");
 }
 
 void processCommand(String cmd) {
@@ -118,6 +116,26 @@ void processCommand(String cmd) {
   cmd.toUpperCase();
   if (cmd.indexOf("STOP") >= 0 || cmd == "S") {
     stopAll();
+    return;
+  }
+
+  // Atomic 4-motor command: ALL,speed,F (or ALL,speed,R)
+  if (cmd.startsWith("ALL,")) {
+    int first = cmd.indexOf(',');
+    int second = cmd.indexOf(',', first + 1);
+    if (first > 0 && second > first) {
+      int speed = constrain(cmd.substring(first + 1, second).toInt(), 0, 255);
+      char direction = cmd.charAt(second + 1);
+      if (direction == 'F' || direction == 'R') {
+        for (int m = 1; m <= 4; m++) {
+          setMotorPins(m, speed, direction);
+        }
+        Serial.print("[ALL] ");
+        Serial.print(direction);
+        Serial.print(" ");
+        Serial.println(speed);
+      }
+    }
     return;
   }
 

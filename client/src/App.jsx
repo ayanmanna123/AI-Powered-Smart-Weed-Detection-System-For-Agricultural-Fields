@@ -73,6 +73,7 @@ export default function App() {
     motorTelemetry,
     handleJoystickMove,
     handleDPadPress,
+    sendMirrorDrive,
     stopRover,
     emergencyStop,
     // N20 Motor TB6612FNG
@@ -292,7 +293,7 @@ export default function App() {
         {activeTab === "virtual" && (
           <VirtualEnvironmentPage
             isWsConnected={isWsConnected}
-            onDriveStep={(dir) => (dir === "STOP" ? stopRover() : handleDPadPress(dir))}
+            onDriveStep={(dir) => (dir === "STOP" ? stopRover() : sendMirrorDrive(dir))}
             onN20Step={(dir, speed) => handleN20Control(dir, speed, true)}
             onEmergencyStop={emergencyStop}
           />
