@@ -1,6 +1,5 @@
-import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Droplets, Compass, Cpu } from "lucide-react";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Droplets, Cpu } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
 
 /**
  * Nozzle4DirHud
@@ -16,7 +15,6 @@ export function Nozzle4DirHud({
   driveState,
   n20State,
   isSpraying,
-  phase,
 }) {
   const isUp = driveState === "FORWARD";
   const isDown = driveState === "REVERSE";
@@ -25,27 +23,12 @@ export function Nozzle4DirHud({
 
   // Map nozzleX (-1..+1) -> 15%..85% inside the mini XY crosshair box
   const dotX = 50 + nozzleX * 36;
-  // Map micro offset within current 10 cm zone
-  const zoneOffset = ((nozzleCm % 10) / 10) * 60 + 20;
+  // Map micro offset within current 30 cm section
+  const zoneOffset = ((nozzleCm % 30) / 30) * 60 + 20;
 
   return (
     <Card className="border-zinc-800 bg-zinc-950/80">
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-xs font-bold text-zinc-100 flex items-center gap-2">
-            <Compass className="size-4 text-sky-400" />
-            4-DIRECTION NOZZLE KINEMATICS
-          </CardTitle>
-          <Badge
-            variant={isSpraying ? "secondary" : phase === "IDLE" ? "outline" : "success"}
-            className="text-[10px] font-mono"
-          >
-            {isSpraying ? "SPRAYING HERBICIDE" : phase}
-          </Badge>
-        </div>
-      </CardHeader>
-
-      <CardContent className="space-y-3 pt-1">
+      <CardContent className="space-y-3 pt-4">
         {/* 4-Way Direction Cross + Live XY Stage */}
         <div className="grid grid-cols-2 gap-3 items-center">
           {/* 4-Direction Actuator Indicators */}

@@ -56,6 +56,10 @@ import {
  *    - Re-align & repeat every 10 cm until end of row.
  * 3. Optional "Mirror to Real Bot" toggle drives the connected ESP8266 hardware in sync.
  */
+const SECTION_CM = 30;
+// Calibrated from real bot measurement: 2000 ms moved 53 cm => 10 cm = 377 ms, 30 cm = 1132 ms
+const DEFAULT_MS_PER_30CM = 1132;
+
 export function VirtualEnvironmentPage({
   isWsConnected,
   onDriveStep, // (direction: "FORWARD" | "BACKWARD" | "STOP") => void
@@ -63,15 +67,14 @@ export function VirtualEnvironmentPage({
   onEmergencyStop,
 }) {
   // Field configuration
-  const [trackLengthCm, setTrackLengthCm] = useState(100);
-  const [plants, setPlants] = useState(() => buildDemoFieldPreset(100));
+  const [trackLengthCm, setTrackLengthCm] = useState(120);
+  const [plants, setPlants] = useState(() => buildDemoFieldPreset(120));
   const [armedTemplate, setArmedTemplate] = useState(null);
   const [visualMode, setVisualMode] = useState("dataset"); // "dataset" | "schematic"
-  const [speedMultiplier, setSpeedMultiplier] = useState(1);
 
-  // Real hardware sync (10 cm == 2000 ms / 2 sec; N20 start->end == 10000 ms / 10 sec)
+  // Real hardware sync (30 cm == 1132 ms => 10 cm == 377 ms; N20 start->end == 10000 ms)
   const [mirrorRealBot, setMirrorRealBot] = useState(false);
-  const [pulseMsPer10Cm, setPulseMsPer10Cm] = useState(2000);
+  const [pulseMsPer30Cm, setPulseMsPer30Cm] = useState(DEFAULT_MS_PER_30CM);
   const [n20FullSweepMs, setN20FullSweepMs] = useState(10000);
 
   // YOLO backend state
@@ -129,9 +132,8 @@ export function VirtualEnvironmentPage({
   const imageCacheRef = useRef(new Map());
   const runIdRef = useRef(0);
   const pausedRef = useRef(false);
-  const speedRef = useRef(1);
   const mirrorRef = useRef(false);
-  const pulseMsRef = useRef(2000);
+  const pulseMsRef = useRef(DEFAULT_MS_PER_30CM);
   const n20SweepRef = useRef(10000);
   const yoloUrlRef = useRef(yoloServerUrl);
   const yoloConfRef = useRef(yoloConf);
@@ -142,16 +144,12 @@ export function VirtualEnvironmentPage({
   const botPosRef = useRef({ botCm: 0, nozzleCm: 0, nozzleX: 0 });
 
   useEffect(() => {
-    speedRef.current = speedMultiplier;
-  }, [speedMultiplier]);
-
-  useEffect(() => {
     mirrorRef.current = mirrorRealBot;
   }, [mirrorRealBot]);
 
   useEffect(() => {
-    pulseMsRef.current = pulseMsPer10Cm;
-  }, [pulseMsPer10Cm]);
+    pulseMsRef.current = pulseMsPer30Cm;
+  }, [pulseMsPer30Cm]);
 
   useEffect(() => {
     n20SweepRef.current = n20FullSweepMs;
@@ -256,8 +254,7 @@ export function VirtualEnvironmentPage({
       const now = performance.now();
       const dt = now - lastTick;
       lastTick = now;
-      const mult = mirrorRef.current ? 1 : speedRef.current;
-      remaining -= dt * mult;
+      remaining -= dt;
     }
   }, []);
 
@@ -332,7 +329,7 @@ export function VirtualEnvironmentPage({
 
         await new Promise((r) => setTimeout(r, 20));
         const now = performance.now();
-        const dt = (now - lastTick) * (mirrorRef.current ? 1 : speedRef.current);
+        const dt = now - lastTick;
         lastTick = now;
 
         elapsedLong = Math.min(effectiveLongMs, elapsedLong + dt);
@@ -383,25 +380,25 @@ export function VirtualEnvironmentPage({
     [onDriveStep, onN20Step, updateBotPose]
   );
 
-  // Execute one 10 cm scan-detect-spray cycle
+  // Execute one 30 cm scan-detect-spray section
   const executeSingleZone = useCallback(
     async (zoneIdx, activeRunId) => {
-      const zoneStart = zoneIdx * 10;
-      const zoneEnd = Math.min(trackLengthCm, zoneStart + 10);
+      const zoneStart = zoneIdx * SECTION_CM;
+      const zoneEnd = Math.min(trackLengthCm, zoneStart + SECTION_CM);
       const checkpointNozzleY = zoneStart + (zoneEnd - zoneStart) / 2;
 
       setCurrentZoneIndex(zoneIdx);
       setActiveZone({ startCm: zoneStart, endCm: zoneEnd });
 
       // ------------------------------------------------------------------
-      // STEP 1: Move 10 cm Forward along the single-line path
-      // Maintain exact conversion: 10 cm == pulseMsRef.current (default 2000 ms)
+      // STEP 1: Move 30 cm Forward along the single-line path
+      // Maintain exact conversion: 30 cm == pulseMsRef.current (default 1132 ms => 10 cm = 377 ms)
       // ------------------------------------------------------------------
-      setPhase("MOVE_10CM");
+      setPhase("MOVE_30CM");
       setDriveState("FORWARD");
       setN20State("STOP");
       const stepCm = Math.max(0.5, zoneEnd - botPosRef.current.botCm);
-      const stepDurationMs = Math.round((stepCm / 10) * pulseMsRef.current);
+      const stepDurationMs = Math.round((stepCm / SECTION_CM) * pulseMsRef.current);
       appendLog(
         `Moving ${stepCm.toFixed(1)} cm forward (${zoneStart} -> ${zoneEnd} cm | ${(
           stepDurationMs / 1000
@@ -609,10 +606,12 @@ export function VirtualEnvironmentPage({
           setDriveState(longDir);
           setN20State(latDir);
 
-          // Maintain 10 cm == pulseMsRef.current (default 2000 ms => 200 ms/cm)
+          // Maintain 30 cm == pulseMsRef.current (default 1132 ms => 37.7 ms/cm, 10 cm = 377 ms)
           // and N20 start->end == n20SweepRef.current (default 10000 ms across span 2.0 => 5000 ms/unit)
           const longMs =
-            longDir === "STOP" ? 0 : Math.max(80, Math.round((Math.abs(deltaCm) / 10) * pulseMsRef.current));
+            longDir === "STOP"
+              ? 0
+              : Math.max(40, Math.round((Math.abs(deltaCm) / SECTION_CM) * pulseMsRef.current));
           const latMs =
             latDir === "STOP" ? 0 : Math.max(120, Math.round((Math.abs(deltaX) / 2) * n20SweepRef.current));
 
@@ -693,7 +692,10 @@ export function VirtualEnvironmentPage({
           const realignLongMs =
             realignDrive === "STOP"
               ? 0
-              : Math.max(80, Math.round((Math.abs(zoneEnd - curAfter.botCm) / 10) * pulseMsRef.current));
+              : Math.max(
+                  40,
+                  Math.round((Math.abs(zoneEnd - curAfter.botCm) / SECTION_CM) * pulseMsRef.current)
+                );
           const realignLatMs =
             realignN20 === "STOP"
               ? 0
@@ -732,7 +734,7 @@ export function VirtualEnvironmentPage({
     }
     if (isRunning) return;
 
-    const totalZones = Math.ceil(trackLengthCm / 10);
+    const totalZones = Math.ceil(trackLengthCm / SECTION_CM);
     let startIdx = currentZoneIndex;
     if (phase === "COMPLETE" || startIdx >= totalZones) {
       // Auto-reset bot to 0 cm for a fresh run
@@ -755,7 +757,7 @@ export function VirtualEnvironmentPage({
     setIsPaused(false);
     setIsRunning(true);
     setArmedTemplate(null);
-    appendLog(`Starting autonomous 10 cm patrol (${trackLengthCm} cm row)...`, "info");
+    appendLog(`Starting autonomous ${SECTION_CM} cm patrol (${trackLengthCm} cm row)...`, "info");
 
     try {
       for (let z = startIdx; z < totalZones; z++) {
@@ -781,10 +783,10 @@ export function VirtualEnvironmentPage({
     }
   };
 
-  // Single 10 cm zone step (ideal for live presentation walkthroughs)
+  // Single 30 cm section step (ideal for live presentation walkthroughs)
   const handleStepZone = async () => {
     if (isRunning) return;
-    const totalZones = Math.ceil(trackLengthCm / 10);
+    const totalZones = Math.ceil(trackLengthCm / SECTION_CM);
     let zoneIdx = currentZoneIndex;
 
     if (phase === "COMPLETE" || zoneIdx >= totalZones) {
@@ -1041,10 +1043,10 @@ export function VirtualEnvironmentPage({
               onClick={handleStepZone}
               disabled={isRunning}
               className="border-zinc-700 bg-zinc-900 text-zinc-200 hover:bg-zinc-800 h-9"
-              title="Advance exactly 10 cm, scan, and spray"
+              title="Advance one 30 cm section, scan, and spray"
             >
               <StepForward className="size-4 text-sky-400" />
-              <span>STEP 10 CM</span>
+              <span>STEP 30 CM</span>
             </Button>
 
             <Button
@@ -1071,7 +1073,7 @@ export function VirtualEnvironmentPage({
             {/* Row Length */}
             <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-lg p-1">
               <Ruler className="size-3.5 text-zinc-400 ml-1" />
-              {[60, 100, 120].map((len) => (
+              {[60, 90, 120, 150].map((len) => (
                 <button
                   key={len}
                   type="button"
@@ -1088,31 +1090,6 @@ export function VirtualEnvironmentPage({
               ))}
             </div>
 
-            {/* Sim Speed */}
-            <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-lg p-1">
-              <span className="text-[10px] text-zinc-400 px-1">SPEED</span>
-              {mirrorRealBot ? (
-                <span className="px-2 py-0.5 rounded text-[11px] bg-emerald-500/20 text-emerald-300 font-bold">
-                  1x (Real-Time)
-                </span>
-              ) : (
-                [0.5, 1, 2].map((spd) => (
-                  <button
-                    key={spd}
-                    type="button"
-                    onClick={() => setSpeedMultiplier(spd)}
-                    className={`px-2 py-0.5 rounded text-[11px] ${
-                      speedMultiplier === spd
-                        ? "bg-sky-500 text-zinc-950 font-bold"
-                        : "text-zinc-400 hover:text-white"
-                    }`}
-                  >
-                    {spd}x
-                  </button>
-                ))
-              )}
-            </div>
-
             {/* Mirror to Real ESP8266 Bot */}
             <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1">
               <Radio
@@ -1124,17 +1101,8 @@ export function VirtualEnvironmentPage({
                     : "text-zinc-500"
                 }`}
               />
-              <span className="text-[11px] text-zinc-300">Mirror Real Bot</span>
+              <span className="text-[11px] text-zinc-300">Bot</span>
               <Switch checked={mirrorRealBot} onCheckedChange={setMirrorRealBot} />
-              {mirrorRealBot && (
-                <span
-                  className={`text-[10px] ${
-                    isWsConnected ? "text-emerald-400" : "text-amber-400"
-                  }`}
-                >
-                  {isWsConnected ? "(WS Live)" : "(HTTP Fallback)"}
-                </span>
-              )}
             </div>
           </div>
         </CardContent>
@@ -1500,27 +1468,29 @@ export function VirtualEnvironmentPage({
             <Card className="border-emerald-500/30 bg-zinc-950/80">
               <CardContent className="p-3 space-y-2 text-[11px] font-mono">
                 <div className="flex items-center justify-between">
-                  <span className="text-emerald-400 font-bold">10 CM MOTOR TIME</span>
+                  <span className="text-emerald-400 font-bold">30 CM MOTOR TIME</span>
                   <span className="text-zinc-200">
-                    {(pulseMsPer10Cm / 1000).toFixed(1)} s ({Math.round(pulseMsPer10Cm / 10)} ms/cm)
+                    {(pulseMsPer30Cm / 1000).toFixed(2)} s ({Math.round(pulseMsPer30Cm / 30)} ms/cm)
                   </span>
                 </div>
                 <Slider
-                  value={pulseMsPer10Cm}
-                  min={500}
-                  max={5000}
-                  step={100}
-                  onChange={setPulseMsPer10Cm}
+                  value={pulseMsPer30Cm}
+                  min={300}
+                  max={3000}
+                  step={10}
+                  onChange={setPulseMsPer30Cm}
                 />
                 <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-400">
-                  <span>10 cm = 2.0 sec runs all 4 motors proportionally.</span>
-                  {pulseMsPer10Cm !== 2000 && (
+                  <span>
+                    10 cm = {Math.round(pulseMsPer30Cm / 3)} ms | 30 cm = {pulseMsPer30Cm} ms
+                  </span>
+                  {pulseMsPer30Cm !== DEFAULT_MS_PER_30CM && (
                     <button
                       type="button"
-                      onClick={() => setPulseMsPer10Cm(2000)}
+                      onClick={() => setPulseMsPer30Cm(DEFAULT_MS_PER_30CM)}
                       className="px-1.5 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 shrink-0"
                     >
-                      Reset 2.0s
+                      Reset 1.13s
                     </button>
                   )}
                 </div>

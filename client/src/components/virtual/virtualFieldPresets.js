@@ -85,38 +85,39 @@ export function createPlantInstance(templateOrKey, positionCm, lateralOffset = 0
   };
 }
 
-export function buildDemoFieldPreset(trackLengthCm = 100) {
-  const ratio = trackLengthCm / 100;
+export function buildDemoFieldPreset(trackLengthCm = 120) {
+  const ratio = trackLengthCm / 120;
   const raw = [
-    { key: "crop_1", cm: 6, lat: -0.75 },
-    { key: "weed_1", cm: 8, lat: 0.92 },
-    { key: "weed_2", cm: 16, lat: -0.94 },
-    { key: "crop_2", cm: 24, lat: 0.15 },
-    { key: "weed_3", cm: 33, lat: 0.95 },
-    { key: "weed_5", cm: 37, lat: -0.45 },
-    { key: "crop_3", cm: 46, lat: 0.75 },
-    { key: "weed_4", cm: 54, lat: -0.88 },
-    { key: "crop_4", cm: 65, lat: -0.3 },
-    { key: "weed_7", cm: 73, lat: 0.9 },
-    { key: "weed_11", cm: 84, lat: -0.92 },
-    { key: "crop_5", cm: 93, lat: 0.25 },
-    { key: "weed_16", cm: 96, lat: -0.95 },
+    { key: "crop_1", cm: 8, lat: -0.75 },
+    { key: "weed_1", cm: 15, lat: 0.92 },
+    { key: "weed_2", cm: 23, lat: -0.94 },
+    { key: "crop_2", cm: 38, lat: 0.15 },
+    { key: "weed_3", cm: 47, lat: 0.95 },
+    { key: "weed_5", cm: 54, lat: -0.45 },
+    { key: "crop_3", cm: 68, lat: 0.75 },
+    { key: "weed_4", cm: 76, lat: -0.88 },
+    { key: "weed_7", cm: 84, lat: 0.9 },
+    { key: "crop_4", cm: 97, lat: -0.3 },
+    { key: "weed_11", cm: 106, lat: -0.92 },
+    { key: "crop_5", cm: 112, lat: 0.25 },
+    { key: "weed_16", cm: 115, lat: -0.95 },
   ];
 
   return raw
     .map((item) =>
       createPlantInstance(
         item.key,
-        Math.min(trackLengthCm - 2, Math.max(2, item.cm * ratio)),
+        Math.min(trackLengthCm - 3, Math.max(3, item.cm * ratio)),
         item.lat
       )
     )
     .sort((a, b) => a.positionCm - b.positionCm);
 }
 
-export function buildRandomField(trackLengthCm = 100, customPool = null) {
+export function buildRandomField(trackLengthCm = 120, customPool = null) {
   const items = [];
-  const zones = Math.floor(trackLengthCm / 10);
+  const sectionCm = 30;
+  const zones = Math.floor(trackLengthCm / sectionCm);
   const sourcePool = Array.isArray(customPool) && customPool.length > 0 ? customPool : PLANT_PALETTE;
   const weedPool = sourcePool.filter((p) => p.type === "weed");
   const cropPool = sourcePool.filter((p) => p.type === "crop");
@@ -125,7 +126,7 @@ export function buildRandomField(trackLengthCm = 100, customPool = null) {
   const fallbackCrops = PLANT_PALETTE.filter((p) => p.type === "crop");
 
   for (let z = 0; z < zones; z++) {
-    const count = Math.random() < 0.75 ? (Math.random() < 0.4 ? 2 : 1) : 0;
+    const count = 2 + (Math.random() < 0.5 ? 1 : 0);
     for (let i = 0; i < count; i++) {
       const isWeed = Math.random() < 0.62;
       const pool = isWeed
@@ -136,7 +137,7 @@ export function buildRandomField(trackLengthCm = 100, customPool = null) {
         ? cropPool
         : fallbackCrops;
       const tpl = pool[Math.floor(Math.random() * pool.length)];
-      const cm = z * 10 + 1.5 + Math.random() * 7;
+      const cm = z * sectionCm + 3 + Math.random() * (sectionCm - 6);
       const lat = Math.random() * 2 - 1;
       items.push(createPlantInstance(tpl, cm, lat));
     }

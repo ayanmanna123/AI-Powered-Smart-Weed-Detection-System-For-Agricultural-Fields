@@ -1,6 +1,5 @@
 import { useRef, useState } from "react";
 import {
-  Camera,
   RefreshCw,
   Sparkles,
   Crosshair,
@@ -10,8 +9,7 @@ import {
   ShieldCheck,
   Columns2,
 } from "lucide-react";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
@@ -70,45 +68,8 @@ export function VirtualCameraHud({
 
   return (
     <Card className="border-zinc-800 bg-zinc-950/80 overflow-hidden">
-      <CardHeader className="pb-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <CardTitle className="text-xs font-bold text-zinc-100 flex items-center gap-2">
-            <Camera className="size-4 text-emerald-400" />
-            10 CM AI CAMERA & YOLOv8
-          </CardTitle>
-
-          <div className="flex items-center gap-1.5">
-            <Badge
-              variant={
-                isYoloOnline
-                  ? "success"
-                  : strictYoloOnly
-                  ? "destructive"
-                  : "warning"
-              }
-              className="text-[10px] font-mono"
-            >
-              {isYoloOnline
-                ? `YOLO ${yoloHealth.model_name || "best.pt"} ONLINE`
-                : strictYoloOnly
-                ? "YOLO SERVER REQUIRED"
-                : "FALLBACK VISION"}
-            </Badge>
-            <Button
-              variant="outline"
-              size="icon-xs"
-              onClick={onCheckYolo}
-              title="Re-check Python YOLOv8 Server"
-              className="border-zinc-700 text-zinc-300"
-            >
-              <RefreshCw className="size-3" />
-            </Button>
-          </div>
-        </div>
-      </CardHeader>
-
-      <CardContent className="space-y-3 pt-1">
-        {/* Action Bar: Split Raw/YOLO View + Test Any Real Photo */}
+      <CardContent className="space-y-3 pt-4">
+        {/* Action Bar: Split Raw/YOLO View + Test Any Real Photo + Refresh */}
         <div className="flex flex-wrap items-center justify-between gap-2 text-[10px] font-mono">
           <button
             type="button"
@@ -124,6 +85,15 @@ export function VirtualCameraHud({
           </button>
 
           <div className="flex items-center gap-1.5">
+            <Button
+              variant="outline"
+              size="icon-xs"
+              onClick={onCheckYolo}
+              title="Re-check Python YOLOv8 Server"
+              className="border-zinc-700 text-zinc-300"
+            >
+              <RefreshCw className="size-3" />
+            </Button>
             {rawFrameUrl && (
               <a
                 href={rawFrameUrl}

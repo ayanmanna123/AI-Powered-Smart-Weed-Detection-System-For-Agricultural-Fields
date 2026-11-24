@@ -3,7 +3,6 @@ import {
   Gamepad2,
   Activity,
   Terminal as TerminalIcon,
-  Radio,
   Bot,
 } from "lucide-react";
 
@@ -177,12 +176,6 @@ export default function App() {
               <TerminalIcon className="size-3.5" />
               <span>CONSOLE & LOGS</span>
             </button>
-          </div>
-
-          {/* Quick Info Badge */}
-          <div className="hidden sm:flex items-center gap-2 text-xs font-mono text-zinc-400">
-            <Radio className="size-3.5 text-emerald-400 animate-pulse" />
-            <span>Skid-Steer 4WD + TB6612 N20</span>
           </div>
         </div>
 

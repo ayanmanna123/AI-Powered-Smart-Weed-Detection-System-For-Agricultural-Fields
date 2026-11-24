@@ -130,14 +130,16 @@ export function VirtualFieldTrack({
   }, [isLocked, autoScrollPaused]);
 
   // Base minimum height so column 3 defines total height and columns 1 & 2 stretch cleanly to match
-  const trackHeightPx = trackLengthCm <= 60 ? 680 : trackLengthCm >= 120 ? 840 : 760;
+  const trackHeightPx = trackLengthCm <= 60 ? 680 : trackLengthCm >= 120 ? 800 : 740;
 
-  const zonesCount = Math.ceil(trackLengthCm / 10);
+  const sectionCm = 30;
+  const zonesCount = Math.ceil(trackLengthCm / sectionCm);
   const zones = Array.from({ length: zonesCount }, (_, i) => ({
     index: i,
-    startCm: i * 10,
-    endCm: Math.min(trackLengthCm, (i + 1) * 10),
+    startCm: i * sectionCm,
+    endCm: Math.min(trackLengthCm, (i + 1) * sectionCm),
   }));
+  const rulerTicksCount = Math.ceil(trackLengthCm / 10);
 
   const clientToTrackCoords = (clientX, clientY) => {
     if (!trackRef.current) return { cm: 0, lat: 0 };
@@ -223,15 +225,7 @@ export function VirtualFieldTrack({
   return (
     <div className="flex-1 flex flex-col gap-2">
       {/* Track Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono">
-        <div className="flex items-center gap-2">
-          <span className="px-2 py-0.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-bold">
-            1D STRAIGHT ROW ({trackLengthCm} cm)
-          </span>
-          <span className="text-zinc-400">
-            Step: <strong className="text-zinc-200">10 cm</strong>
-          </span>
-        </div>
+      <div className="flex flex-wrap items-center justify-end gap-2 text-[11px] font-mono min-h-5">
         <div className="flex items-center gap-2 text-zinc-400">
           {isLocked ? (
             autoScrollPaused ? (
@@ -274,12 +268,12 @@ export function VirtualFieldTrack({
           style={{ minHeight: `${trackHeightPx}px` }}
           className="w-11 shrink-0 relative self-stretch flex flex-col justify-between text-[10px] font-mono text-zinc-500 py-0.5"
         >
-          {Array.from({ length: zonesCount + 1 }, (_, idx) => {
-            const cm = (zonesCount - idx) * 10;
+          {Array.from({ length: rulerTicksCount + 1 }, (_, idx) => {
+            const cm = (rulerTicksCount - idx) * 10;
             return (
               <div key={cm} className="flex items-center justify-end gap-1 leading-none">
-                <span className={cm % 20 === 0 ? "text-zinc-300 font-semibold" : ""}>{cm}cm</span>
-                <span className="w-2 h-px bg-zinc-700" />
+                <span className={cm % 30 === 0 ? "text-zinc-200 font-semibold" : ""}>{cm}cm</span>
+                <span className={cm % 30 === 0 ? "w-2.5 h-px bg-emerald-500/60" : "w-1.5 h-px bg-zinc-700"} />
               </div>
             );
           })}
@@ -463,15 +457,15 @@ export function VirtualFieldTrack({
             );
           })}
 
-          {/* 10 cm AI Camera Scan Frame around Nozzle Bay */}
+          {/* 30 cm AI Camera Scan Frame around Nozzle Bay */}
           {phase !== "IDLE" && (activeZone || botCm > 0) && (
             <div
               style={{
                 bottom: `${cmToBottomPct(
-                  activeZone ? activeZone.startCm : Math.max(0, botCm - 10)
+                  activeZone ? activeZone.startCm : Math.max(0, botCm - sectionCm)
                 )}%`,
                 height: `${
-                  (((activeZone ? activeZone.endCm - activeZone.startCm : 10) / trackLengthCm) *
+                  (((activeZone ? activeZone.endCm - activeZone.startCm : sectionCm) / trackLengthCm) *
                     100)
                 }%`,
               }}
@@ -487,7 +481,7 @@ export function VirtualFieldTrack({
                 <div className="absolute inset-0 flex items-center justify-center">
                   <div className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-zinc-950/90 border border-amber-400/60 text-amber-300 text-[10px] font-mono animate-pulse">
                     <ScanLine className="size-3" />
-                    <span>YOLOv8 SCANNING 10 CM BAY</span>
+                    <span>YOLOv8 SCANNING 30 CM SECTION</span>
                   </div>
                 </div>
               )}
