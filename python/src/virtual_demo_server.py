@@ -12,12 +12,13 @@ Usage:
 
 import argparse
 import base64
+import glob
 import os
 import sys
 import time
 import cv2
 import numpy as np
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from ultralytics import YOLO
 
 from detection_output import format_detection
@@ -26,6 +27,7 @@ DEFAULT_PORT = 5050
 DEFAULT_CONFIDENCE = 0.30
 
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+DATASET_DIR = os.path.join(PROJECT_ROOT, 'archive', 'agri_data', 'data')
 MODEL_CANDIDATES = [
     os.path.join(PROJECT_ROOT, 'runs', 'detect', 'yolov8_weed_crop', 'weights', 'best.pt'),
     os.path.join(PROJECT_ROOT, 'yolov8n.pt'),
@@ -37,6 +39,93 @@ model = None
 model_path_used = None
 is_custom_model = False
 default_conf = DEFAULT_CONFIDENCE
+frame_counter = 0
+dataset_catalog = []
+dataset_files_set = set()
+
+
+def build_dataset_catalog():
+    """Index all weed & crop samples in archive/agri_data/data with box stats."""
+    global dataset_catalog, dataset_files_set
+    catalog = []
+    allowed = set()
+    if not os.path.isdir(DATASET_DIR):
+        dataset_catalog = []
+        dataset_files_set = set()
+        return
+
+    txt_paths = sorted(glob.glob(os.path.join(DATASET_DIR, '*.txt')))
+    for txt_path in txt_paths:
+        base = os.path.splitext(os.path.basename(txt_path))[0]
+        img_name = f"{base}.jpeg"
+        img_path = os.path.join(DATASET_DIR, img_name)
+        if not os.path.isfile(img_path):
+            continue
+
+        classes = set()
+        box_count = 0
+        total_area = 0.0
+        try:
+            with open(txt_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) < 5:
+                        continue
+                    cls_id = int(float(parts[0]))
+                    w = float(parts[3])
+                    h = float(parts[4])
+                    classes.add(cls_id)
+                    box_count += 1
+                    total_area += w * h
+        except Exception:
+            continue
+
+        if box_count == 0:
+            continue
+
+        # Class 1 = weed, Class 0 = crop (override known mislabeled archive entries)
+        if base in ('agri_0_106',):
+            plant_type = 'weed'
+        elif classes == {1}:
+            plant_type = 'weed'
+        elif classes == {0}:
+            plant_type = 'crop'
+        elif 1 in classes:
+            plant_type = 'weed'
+        else:
+            plant_type = 'crop'
+
+        avg_area = total_area / box_count
+        if plant_type == 'weed':
+            if box_count > 1:
+                category = 'Cluster Weed'
+            elif avg_area < 0.14:
+                category = 'Small Sprout'
+            elif avg_area > 0.40:
+                category = 'Broadleaf / Large'
+            else:
+                category = 'Medium Weed'
+        else:
+            if box_count > 1:
+                category = 'Crop Cluster'
+            elif avg_area < 0.14:
+                category = 'Seedling Crop'
+            else:
+                category = 'Mature Crop'
+
+        allowed.add(img_name)
+        catalog.append({
+            'key': f'ds_{base}',
+            'type': plant_type,
+            'label': f"{'Weed' if plant_type == 'weed' else 'Crop'} #{base.replace('agri_0_', '')}",
+            'filename': img_name,
+            'category': category,
+            'box_count': box_count,
+            'area_pct': round(min(100.0, total_area * 100.0), 1),
+        })
+
+    dataset_catalog = catalog
+    dataset_files_set = allowed
 
 
 def find_model(custom_path=None):
@@ -58,6 +147,64 @@ def add_cors_headers(response):
     return response
 
 
+@app.route('/dataset/plants', methods=['GET', 'OPTIONS'])
+def list_dataset_plants():
+    if request.method == 'OPTIONS':
+        return ('', 204)
+
+    plant_type = (request.args.get('type') or 'all').lower()
+    category = (request.args.get('category') or 'all').lower()
+    search = (request.args.get('search') or '').strip().lower()
+    page = max(1, int(request.args.get('page', 1)))
+    limit = min(100, max(1, int(request.args.get('limit', 36))))
+
+    filtered = dataset_catalog
+    if plant_type in ('weed', 'crop'):
+        filtered = [item for item in filtered if item['type'] == plant_type]
+    if category != 'all':
+        filtered = [item for item in filtered if item['category'].lower() == category]
+    if search:
+        filtered = [
+            item
+            for item in filtered
+            if search in item['label'].lower()
+            or search in item['filename'].lower()
+            or search in item['category'].lower()
+        ]
+
+    total_matching = len(filtered)
+    start = (page - 1) * limit
+    end = start + limit
+    page_items = filtered[start:end]
+
+    total_weeds = sum(1 for item in dataset_catalog if item['type'] == 'weed')
+    total_crops = sum(1 for item in dataset_catalog if item['type'] == 'crop')
+    weed_categories = sorted(
+        {item['category'] for item in dataset_catalog if item['type'] == 'weed'}
+    )
+    crop_categories = sorted(
+        {item['category'] for item in dataset_catalog if item['type'] == 'crop'}
+    )
+
+    return jsonify({
+        'total_weeds': total_weeds,
+        'total_crops': total_crops,
+        'total_matching': total_matching,
+        'page': page,
+        'limit': limit,
+        'weed_categories': weed_categories,
+        'crop_categories': crop_categories,
+        'items': page_items,
+    })
+
+
+@app.route('/dataset/image/<filename>', methods=['GET'])
+def serve_dataset_image(filename):
+    if filename not in dataset_files_set:
+        return jsonify({'error': 'Image not found in dataset catalog'}), 404
+    return send_from_directory(DATASET_DIR, filename)
+
+
 @app.route('/health', methods=['GET', 'OPTIONS'])
 def health():
     if request.method == 'OPTIONS':
@@ -74,6 +221,7 @@ def health():
 
 @app.route('/detect', methods=['POST', 'OPTIONS'])
 def detect():
+    global frame_counter
     if request.method == 'OPTIONS':
         return ('', 204)
 
@@ -98,11 +246,18 @@ def detect():
     if frame is None:
         return jsonify({'error': 'Decoded frame is empty'}), 400
 
+    frame_counter += 1
+    current_frame_id = frame_counter
     img_h, img_w = frame.shape[:2]
     t0 = time.time()
     results = model(frame, conf=conf_thresh, imgsz=512, verbose=False)
     t1 = time.time()
     latency_ms = (t1 - t0) * 1000.0
+
+    print(
+        f"\n[YOLO FRAME #{current_frame_id}] {img_w}x{img_h} ({len(img_bytes)/1024:.1f} KB) "
+        f"| conf>={conf_thresh:.2f} | model={os.path.basename(model_path_used)}"
+    )
 
     detections = []
     annotated = frame.copy()
@@ -160,7 +315,7 @@ def detect():
 
     cv2.putText(
         annotated,
-        f"YOLOv8 | {latency_ms:.0f}ms | Det:{len(detections)}",
+        f"YOLOv8 #{current_frame_id} | {latency_ms:.0f}ms | Det:{len(detections)}",
         (10, 24),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.6,
@@ -170,14 +325,19 @@ def detect():
 
     _, buffer = cv2.imencode('.jpg', annotated, [cv2.IMWRITE_JPEG_QUALITY, 85])
     annotated_b64 = base64.b64encode(buffer).decode('utf-8')
+    print(f"  -> {len(detections)} detection(s) in {latency_ms:.1f} ms")
 
     return jsonify({
+        'frame_id': current_frame_id,
+        'timestamp': time.strftime('%H:%M:%S'),
+        'image_bytes': len(img_bytes),
         'detections': detections,
         'annotated_image': f'data:image/jpeg;base64,{annotated_b64}',
         'latency_ms': round(latency_ms, 2),
         'image_width': img_w,
         'image_height': img_h,
         'model_name': os.path.basename(model_path_used) if model_path_used else 'unknown',
+        'model_path': model_path_used,
         'is_custom_model': is_custom_model,
     })
 
@@ -198,6 +358,9 @@ def main():
         sys.exit(1)
 
     is_custom_model = 'best.pt' in os.path.basename(model_path_used)
+    print(f"[*] Indexing dataset plants from: {DATASET_DIR}")
+    build_dataset_catalog()
+    print(f"[*] Indexed {len(dataset_catalog)} plant samples from dataset.")
     print(f"[*] Loading YOLOv8 model: {model_path_used}")
     model = YOLO(model_path_used)
 

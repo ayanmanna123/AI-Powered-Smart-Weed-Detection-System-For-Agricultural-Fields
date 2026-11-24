@@ -1,73 +1,83 @@
 /**
- * Palette items, sample dataset sprites, and preset field paths
- * for the 1D Straight-Row Virtual Field Simulator.
+ * Palette items, sample dataset sprites (16 weeds + 8 crops bundled offline),
+ * and preset field paths for the 1D Straight-Row Virtual Field Simulator.
+ *
+ * When the Python server is running, VirtualEnvironmentPage also loads all
+ * 665 weed + 633 crop images directly from python/archive/agri_data/data.
  */
 
+const OFFLINE_WEED_LABELS = [
+  { label: "Broadleaf Weed", category: "Broadleaf / Large" },
+  { label: "Grassy Weed", category: "Cluster Weed" },
+  { label: "Yellow Nutsedge", category: "Medium Weed" },
+  { label: "Emerging Weed", category: "Small Sprout" },
+  { label: "Amaranth Weed", category: "Broadleaf / Large" },
+  { label: "Spurge Weed", category: "Small Sprout" },
+  { label: "Crabgrass Patch", category: "Cluster Weed" },
+  { label: "Pigweed Leaf", category: "Medium Weed" },
+  { label: "Ragweed Sprout", category: "Small Sprout" },
+  { label: "Foxtail Weed", category: "Medium Weed" },
+  { label: "Dandelion Cluster", category: "Cluster Weed" },
+  { label: "Lambsquarters", category: "Broadleaf / Large" },
+  { label: "Chickweed Patch", category: "Cluster Weed" },
+  { label: "Purslane Weed", category: "Medium Weed" },
+  { label: "Bindweed Shoot", category: "Small Sprout" },
+  { label: "Thistle Weed", category: "Broadleaf / Large" },
+  { label: "Sowthistle Weed", category: "Broadleaf / Large" },
+];
+
+const OFFLINE_CROP_LABELS = [
+  { label: "Healthy Crop", category: "Mature Crop" },
+  { label: "Crop Seedling", category: "Seedling Crop" },
+  { label: "Young Crop Row", category: "Crop Cluster" },
+  { label: "Broad Crop Leaf", category: "Mature Crop" },
+  { label: "Field Crop #5", category: "Mature Crop" },
+  { label: "Crop Shoot #6", category: "Seedling Crop" },
+  { label: "Crop Cluster #7", category: "Crop Cluster" },
+  { label: "Mature Crop #8", category: "Mature Crop" },
+];
+
 export const PLANT_PALETTE = [
-  {
-    key: "weed_broadleaf",
+  ...OFFLINE_WEED_LABELS.map((meta, idx) => ({
+    key: `weed_${idx + 1}`,
     type: "weed",
-    label: "Broadleaf Weed",
-    shortLabel: "Broadleaf",
-    sampleImage: "/samples/weed_1.jpeg",
+    label: meta.label,
+    category: meta.category,
+    shortLabel: `Weed #${idx + 1}`,
+    sampleImage: `/samples/weed_${idx + 1}.jpeg`,
     badge: "WEED",
-    description: "Invasive broadleaf weed — target for herbicide spray",
-  },
-  {
-    key: "weed_grassy",
-    type: "weed",
-    label: "Grassy Weed",
-    shortLabel: "Grassy",
-    sampleImage: "/samples/weed_2.jpeg",
-    badge: "WEED",
-    description: "Fast-spreading grass weed along crop row",
-  },
-  {
-    key: "weed_nutsedge",
-    type: "weed",
-    label: "Yellow Nutsedge",
-    shortLabel: "Nutsedge",
-    sampleImage: "/samples/weed_3.jpeg",
-    badge: "WEED",
-    description: "Dense sedge cluster requiring precision spot spray",
-  },
-  {
-    key: "weed_sprout",
-    type: "weed",
-    label: "Emerging Weed",
-    shortLabel: "Weed #4",
-    sampleImage: "/samples/weed_4.jpeg",
-    badge: "WEED",
-    description: "Dataset weed sample (agri_0_1095)",
-  },
-  {
-    key: "crop_row",
+    description: `${meta.category} • Dataset Weed #${idx + 1}`,
+  })),
+  ...OFFLINE_CROP_LABELS.map((meta, idx) => ({
+    key: `crop_${idx + 1}`,
     type: "crop",
-    label: "Healthy Crop",
-    shortLabel: "Crop #1",
-    sampleImage: "/samples/crop_1.jpeg",
+    label: meta.label,
+    category: meta.category,
+    shortLabel: `Crop #${idx + 1}`,
+    sampleImage: `/samples/crop_${idx + 1}.jpeg`,
     badge: "CROP",
-    description: "Protected agricultural crop — bot must skip spraying",
-  },
-  {
-    key: "crop_seedling",
-    type: "crop",
-    label: "Crop Seedling",
-    shortLabel: "Crop #2",
-    sampleImage: "/samples/crop_2.jpeg",
-    badge: "CROP",
-    description: "Dataset crop sample (agri_0_1053) — safe zone",
-  },
+    description: `${meta.category} • Protected Crop #${idx + 1}`,
+  })),
 ];
 
 let uidCounter = 1;
-export function createPlantInstance(templateKey, positionCm, lateralOffset = 0) {
-  const tpl = PLANT_PALETTE.find((p) => p.key === templateKey) || PLANT_PALETTE[0];
+
+/**
+ * Create a plant node from either a template key or a full template object
+ * (such as an entry from the 665-weed/633-crop Python dataset catalog or custom photo).
+ */
+export function createPlantInstance(templateOrKey, positionCm, lateralOffset = 0) {
+  const tpl =
+    typeof templateOrKey === "string"
+      ? PLANT_PALETTE.find((p) => p.key === templateOrKey) || PLANT_PALETTE[0]
+      : templateOrKey || PLANT_PALETTE[0];
+
   return {
     id: `plant-${Date.now()}-${uidCounter++}`,
     templateKey: tpl.key,
     type: tpl.type,
     label: tpl.label,
+    category: tpl.category || (tpl.type === "weed" ? "Weed" : "Crop"),
     sampleImage: tpl.sampleImage,
     positionCm: Number(positionCm.toFixed(1)),
     lateralOffset: Number(Math.max(-1, Math.min(1, lateralOffset)).toFixed(2)),
@@ -78,19 +88,19 @@ export function createPlantInstance(templateKey, positionCm, lateralOffset = 0) 
 export function buildDemoFieldPreset(trackLengthCm = 100) {
   const ratio = trackLengthCm / 100;
   const raw = [
-    { key: "crop_row", cm: 6, lat: -0.75 },
-    { key: "weed_broadleaf", cm: 8, lat: 0.92 },
-    { key: "weed_grassy", cm: 16, lat: -0.94 },
-    { key: "crop_seedling", cm: 24, lat: 0.15 },
-    { key: "weed_nutsedge", cm: 33, lat: 0.95 },
-    { key: "weed_broadleaf", cm: 37, lat: -0.45 },
-    { key: "crop_row", cm: 46, lat: 0.75 },
-    { key: "weed_sprout", cm: 54, lat: -0.88 },
-    { key: "crop_seedling", cm: 65, lat: -0.3 },
-    { key: "weed_grassy", cm: 73, lat: 0.9 },
-    { key: "weed_nutsedge", cm: 84, lat: -0.92 },
-    { key: "crop_row", cm: 93, lat: 0.25 },
-    { key: "weed_broadleaf", cm: 96, lat: -0.95 },
+    { key: "crop_1", cm: 6, lat: -0.75 },
+    { key: "weed_1", cm: 8, lat: 0.92 },
+    { key: "weed_2", cm: 16, lat: -0.94 },
+    { key: "crop_2", cm: 24, lat: 0.15 },
+    { key: "weed_3", cm: 33, lat: 0.95 },
+    { key: "weed_5", cm: 37, lat: -0.45 },
+    { key: "crop_3", cm: 46, lat: 0.75 },
+    { key: "weed_4", cm: 54, lat: -0.88 },
+    { key: "crop_4", cm: 65, lat: -0.3 },
+    { key: "weed_7", cm: 73, lat: 0.9 },
+    { key: "weed_11", cm: 84, lat: -0.92 },
+    { key: "crop_5", cm: 93, lat: 0.25 },
+    { key: "weed_16", cm: 96, lat: -0.95 },
   ];
 
   return raw
@@ -104,21 +114,31 @@ export function buildDemoFieldPreset(trackLengthCm = 100) {
     .sort((a, b) => a.positionCm - b.positionCm);
 }
 
-export function buildRandomField(trackLengthCm = 100) {
+export function buildRandomField(trackLengthCm = 100, customPool = null) {
   const items = [];
   const zones = Math.floor(trackLengthCm / 10);
-  const weedTemplates = ["weed_broadleaf", "weed_grassy", "weed_nutsedge", "weed_sprout"];
-  const cropTemplates = ["crop_row", "crop_seedling"];
+  const sourcePool = Array.isArray(customPool) && customPool.length > 0 ? customPool : PLANT_PALETTE;
+  const weedPool = sourcePool.filter((p) => p.type === "weed");
+  const cropPool = sourcePool.filter((p) => p.type === "crop");
+
+  const fallbackWeeds = PLANT_PALETTE.filter((p) => p.type === "weed");
+  const fallbackCrops = PLANT_PALETTE.filter((p) => p.type === "crop");
 
   for (let z = 0; z < zones; z++) {
     const count = Math.random() < 0.75 ? (Math.random() < 0.4 ? 2 : 1) : 0;
     for (let i = 0; i < count; i++) {
       const isWeed = Math.random() < 0.62;
-      const pool = isWeed ? weedTemplates : cropTemplates;
-      const key = pool[Math.floor(Math.random() * pool.length)];
+      const pool = isWeed
+        ? weedPool.length > 0
+          ? weedPool
+          : fallbackWeeds
+        : cropPool.length > 0
+        ? cropPool
+        : fallbackCrops;
+      const tpl = pool[Math.floor(Math.random() * pool.length)];
       const cm = z * 10 + 1.5 + Math.random() * 7;
       const lat = Math.random() * 2 - 1;
-      items.push(createPlantInstance(key, cm, lat));
+      items.push(createPlantInstance(tpl, cm, lat));
     }
   }
   return items.sort((a, b) => a.positionCm - b.positionCm);

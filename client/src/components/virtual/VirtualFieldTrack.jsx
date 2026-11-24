@@ -76,10 +76,19 @@ export function VirtualFieldTrack({
     e.preventDefault();
     setHoverPos(null);
     if (isLocked) return;
+    const rawJson = e.dataTransfer.getData("application/x-agri-plant-json");
     const templateKey = e.dataTransfer.getData("application/x-agri-plant");
-    if (!templateKey) return;
+    let template = templateKey;
+    if (rawJson) {
+      try {
+        template = JSON.parse(rawJson);
+      } catch {
+        template = templateKey;
+      }
+    }
+    if (!template) return;
     const { cm, lat } = clientToTrackCoords(e.clientX, e.clientY);
-    onDropPlant(templateKey, cm, lat);
+    onDropPlant(template, cm, lat);
   };
 
   const handleTrackClick = (e) => {

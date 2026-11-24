@@ -15,6 +15,10 @@ import {
   Ruler,
   Terminal,
   Plus,
+  Search,
+  ChevronLeft,
+  ChevronRight,
+  Upload,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,6 +39,7 @@ import {
   DEFAULT_YOLO_SERVER_URL,
   checkYoloHealth,
   detectFrameWithYolo,
+  fetchDatasetPlants,
   renderZoneCameraSnapshot,
   annotateFallbackFrame,
 } from "@/services/yoloApi";
@@ -73,10 +78,22 @@ export function VirtualEnvironmentPage({
   const [yoloServerUrl, setYoloServerUrl] = useState(DEFAULT_YOLO_SERVER_URL);
   const [yoloHealth, setYoloHealth] = useState({ online: false });
   const [yoloConf, setYoloConf] = useState(0.3);
+  const [strictYoloOnly, setStrictYoloOnly] = useState(false);
+  const [rawFrameUrl, setRawFrameUrl] = useState(null);
   const [cameraFrameUrl, setCameraFrameUrl] = useState(null);
   const [visionSource, setVisionSource] = useState(null);
   const [lastDetections, setLastDetections] = useState([]);
   const [lastLatencyMs, setLastLatencyMs] = useState(null);
+  const [lastYoloProof, setLastYoloProof] = useState(null);
+
+  // Full weed & crop dataset palette browser state
+  const [paletteType, setPaletteType] = useState("all"); // "all" | "weed" | "crop"
+  const [paletteCategory, setPaletteCategory] = useState("all");
+  const [paletteSearch, setPaletteSearch] = useState("");
+  const [palettePage, setPalettePage] = useState(1);
+  const [datasetCatalog, setDatasetCatalog] = useState(null);
+  const [customPaletteItems, setCustomPaletteItems] = useState([]);
+  const customPlantInputRef = useRef(null);
 
   // Simulation runtime state
   const [isRunning, setIsRunning] = useState(false);
@@ -118,6 +135,7 @@ export function VirtualEnvironmentPage({
   const n20SweepRef = useRef(10000);
   const yoloUrlRef = useRef(yoloServerUrl);
   const yoloConfRef = useRef(yoloConf);
+  const strictYoloRef = useRef(strictYoloOnly);
   const visualModeRef = useRef(visualMode);
   const plantsRef = useRef(plants);
 
@@ -148,6 +166,10 @@ export function VirtualEnvironmentPage({
   }, [yoloConf]);
 
   useEffect(() => {
+    strictYoloRef.current = strictYoloOnly;
+  }, [strictYoloOnly]);
+
+  useEffect(() => {
     visualModeRef.current = visualMode;
   }, [visualMode]);
 
@@ -176,6 +198,37 @@ export function VirtualEnvironmentPage({
   useEffect(() => {
     refreshYoloHealth();
   }, [refreshYoloHealth]);
+
+  // Load all weed & crop varieties from Python dataset catalog when online
+  useEffect(() => {
+    let cancelled = false;
+    const loadCatalog = async () => {
+      if (!yoloHealth?.online) {
+        setDatasetCatalog(null);
+        return;
+      }
+      try {
+        const res = await fetchDatasetPlants(yoloServerUrl, {
+          type: paletteType,
+          category: paletteCategory,
+          search: paletteSearch,
+          page: palettePage,
+          limit: 24,
+        });
+        if (!cancelled) {
+          setDatasetCatalog(res);
+        }
+      } catch {
+        if (!cancelled) {
+          setDatasetCatalog(null);
+        }
+      }
+    };
+    loadCatalog();
+    return () => {
+      cancelled = true;
+    };
+  }, [yoloHealth?.online, yoloServerUrl, paletteType, paletteCategory, paletteSearch, palettePage]);
 
   const updateBotPose = useCallback((nextBotCm, nextNozzleCm, nextNozzleX) => {
     botPosRef.current = {
@@ -401,14 +454,26 @@ export function VirtualEnvironmentPage({
         visualMode: visualModeRef.current,
       });
 
+      if (runIdRef.current !== activeRunId) throw new Error("ABORTED");
+      setRawFrameUrl(rawSnapshot);
+
       let detectedList = [];
       let annotatedUrl = rawSnapshot;
       let usedSource = "fallback";
       let latency = null;
+      let proofPayload = null;
 
-      // Try live YOLOv8 best.pt backend first when zone has plants (or always inspect)
+      // Try live YOLOv8 best.pt backend first
       const health = await checkYoloHealth(yoloUrlRef.current);
       setYoloHealth(health);
+
+      if (strictYoloRef.current && !health.online) {
+        appendLog(
+          "Strict Real YOLO Only is ON, but Python best.pt server is offline! Start virtual_demo_server.py.",
+          "error"
+        );
+        throw new Error("ABORTED");
+      }
 
       if (health.online) {
         try {
@@ -417,10 +482,17 @@ export function VirtualEnvironmentPage({
             rawSnapshot,
             yoloConfRef.current
           );
-          if (yoloResult && Array.isArray(yoloResult.detections) && yoloResult.detections.length > 0) {
+          if (
+            yoloResult &&
+            Array.isArray(yoloResult.detections) &&
+            (strictYoloRef.current ||
+              visualModeRef.current === "dataset" ||
+              yoloResult.detections.length > 0)
+          ) {
             usedSource = "yolo";
             annotatedUrl = yoloResult.annotated_image;
             latency = yoloResult.latency_ms;
+            proofPayload = yoloResult;
 
             // Match each YOLO detection back to its exact non-overlapping plant tile
             const span = Math.max(1, zoneEnd - zoneStart);
@@ -453,11 +525,14 @@ export function VirtualEnvironmentPage({
             });
           }
         } catch {
-          // Fall back cleanly if YOLO server drops mid-run
+          if (strictYoloRef.current) {
+            appendLog("Strict Real YOLO Only: /detect request failed.", "error");
+            throw new Error("ABORTED");
+          }
         }
       }
 
-      // Built-in Simulation Vision fallback (offline or schematic mode)
+      // Built-in Simulation Vision fallback (only when Strict YOLO Only is OFF)
       if (usedSource !== "yolo") {
         const fallback = await annotateFallbackFrame(
           rawSnapshot,
@@ -478,6 +553,7 @@ export function VirtualEnvironmentPage({
       setVisionSource(usedSource);
       setLastDetections(detectedList);
       setLastLatencyMs(latency);
+      setLastYoloProof(proofPayload);
 
       await waitMs(550, activeRunId);
 
@@ -486,11 +562,15 @@ export function VirtualEnvironmentPage({
         .sort((a, b) => a.positionCm - b.positionCm);
       const detectedCrops = detectedList.filter((d) => d.class === "crop");
 
-      // Mark protected crops immediately
-      const cropIdsToProtect = new Set([
-        ...detectedCrops.map((c) => c.plantId),
-        ...zonePlants.filter((p) => p.type === "crop").map((p) => p.id),
-      ]);
+      // Mark protected crops immediately (in Strict YOLO mode, only use real YOLO detections)
+      const cropIdsToProtect = new Set(
+        strictYoloRef.current
+          ? detectedCrops.map((c) => c.plantId)
+          : [
+              ...detectedCrops.map((c) => c.plantId),
+              ...zonePlants.filter((p) => p.type === "crop").map((p) => p.id),
+            ]
+      );
 
       if (cropIdsToProtect.size > 0) {
         setPlants((prev) =>
@@ -763,10 +843,12 @@ export function VirtualEnvironmentPage({
     setPhase("IDLE");
     setCurrentZoneIndex(0);
     setActiveZone(null);
+    setRawFrameUrl(null);
     setCameraFrameUrl(null);
     setVisionSource(null);
     setLastDetections([]);
     setLastLatencyMs(null);
+    setLastYoloProof(null);
     updateBotPose(0, 0, 0);
     stopHardwareActuators();
     setPlants((prev) => prev.map((p) => ({ ...p, status: "pending" })));
@@ -812,12 +894,112 @@ export function VirtualEnvironmentPage({
     setPlants((prev) => prev.filter((p) => p.id !== plantId));
   };
 
+  // Live test with any external photo chosen by user/evaluator
+  const handleTestCustomPhoto = async (dataUrl, fileName) => {
+    setRawFrameUrl(dataUrl);
+    const health = await checkYoloHealth(yoloUrlRef.current);
+    setYoloHealth(health);
+    if (!health.online) {
+      appendLog(
+        `Cannot test "${fileName}": Python YOLOv8 server is offline at ${yoloUrlRef.current}`,
+        "error"
+      );
+      return;
+    }
+
+    try {
+      const res = await detectFrameWithYolo(yoloUrlRef.current, dataUrl, yoloConfRef.current);
+      setCameraFrameUrl(res.annotated_image);
+      setVisionSource("yolo");
+      setLastDetections(res.detections || []);
+      setLastLatencyMs(res.latency_ms);
+      setLastYoloProof(res);
+      appendLog(
+        `Real Photo Test "${fileName}": Frame #${res.frame_id} -> ${
+          res.detections?.length || 0
+        } detection(s) in ${Math.round(res.latency_ms)} ms`,
+        "success"
+      );
+    } catch (err) {
+      appendLog(`Real Photo Test failed: ${err.message}`, "error");
+    }
+  };
+
+  const handleAddCustomPalettePhoto = (e, plantType = "weed") => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        const customItem = {
+          key: `custom-${Date.now()}`,
+          type: plantType,
+          label: file.name.replace(/\.[^/.]+$/, "").slice(0, 18) || "Custom Weed",
+          category: "Custom Upload",
+          sampleImage: reader.result,
+          badge: plantType.toUpperCase(),
+          description: "Uploaded custom photo",
+        };
+        setCustomPaletteItems((prev) => [customItem, ...prev]);
+        setArmedTemplate(customItem);
+        appendLog(`Added "${customItem.label}" to palette — drag or click row to place.`, "info");
+      }
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
   const handleTrackLengthChange = (newLen) => {
     if (isRunning) return;
     setTrackLengthCm(newLen);
     handleReset();
     setPlants(buildDemoFieldPreset(newLen));
   };
+
+  // Build active palette list (Dataset Catalog when Python online, else 24 bundled varieties)
+  const offlineFiltered = [...customPaletteItems, ...PLANT_PALETTE].filter((item) => {
+    if (paletteType !== "all" && item.type !== paletteType) return false;
+    if (paletteCategory !== "all" && item.category.toLowerCase() !== paletteCategory.toLowerCase()) {
+      return false;
+    }
+    if (paletteSearch.trim()) {
+      const q = paletteSearch.trim().toLowerCase();
+      return (
+        item.label.toLowerCase().includes(q) ||
+        item.category.toLowerCase().includes(q) ||
+        item.key.toLowerCase().includes(q)
+      );
+    }
+    return true;
+  });
+
+  const isCatalogActive = Boolean(datasetCatalog);
+  const displayedPalette = isCatalogActive
+    ? [...(palettePage === 1 ? customPaletteItems : []), ...(datasetCatalog.items || [])]
+    : offlineFiltered;
+  const totalWeedsAvail = isCatalogActive
+    ? datasetCatalog.total_weeds
+    : PLANT_PALETTE.filter((p) => p.type === "weed").length;
+  const totalCropsAvail = isCatalogActive
+    ? datasetCatalog.total_crops
+    : PLANT_PALETTE.filter((p) => p.type === "crop").length;
+  const totalPages = isCatalogActive
+    ? Math.max(1, Math.ceil((datasetCatalog.total_matching || 0) / 24))
+    : 1;
+
+  const availableCategories = isCatalogActive
+    ? paletteType === "crop"
+      ? datasetCatalog.crop_categories || []
+      : paletteType === "weed"
+      ? datasetCatalog.weed_categories || []
+      : [...(datasetCatalog.weed_categories || []), ...(datasetCatalog.crop_categories || [])]
+    : Array.from(
+        new Set(
+          PLANT_PALETTE.filter((p) => paletteType === "all" || p.type === paletteType).map(
+            (p) => p.category
+          )
+        )
+      );
 
   const totalWeedsPlaced = plants.filter((p) => p.type === "weed").length;
   const totalCropsPlaced = plants.filter((p) => p.type === "crop").length;
@@ -1005,11 +1187,111 @@ export function VirtualEnvironmentPage({
                 </div>
               </div>
 
-              {/* Draggable Cards */}
-              <div className="grid grid-cols-2 lg:grid-cols-1 gap-2">
-                {PLANT_PALETTE.map((item) => {
+              {/* Weed / Crop Type Filter Tabs */}
+              <div className="grid grid-cols-3 gap-1 bg-zinc-900/70 p-1 rounded-lg border border-zinc-800 text-[10px] font-mono">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPaletteType("all");
+                    setPaletteCategory("all");
+                    setPalettePage(1);
+                  }}
+                  className={`py-1 rounded ${
+                    paletteType === "all"
+                      ? "bg-emerald-500 text-zinc-950 font-bold"
+                      : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  All ({totalWeedsAvail + totalCropsAvail})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPaletteType("weed");
+                    setPaletteCategory("all");
+                    setPalettePage(1);
+                  }}
+                  className={`py-1 rounded ${
+                    paletteType === "weed"
+                      ? "bg-rose-500 text-white font-bold"
+                      : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  Weeds ({totalWeedsAvail})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPaletteType("crop");
+                    setPaletteCategory("all");
+                    setPalettePage(1);
+                  }}
+                  className={`py-1 rounded ${
+                    paletteType === "crop"
+                      ? "bg-emerald-500 text-zinc-950 font-bold"
+                      : "text-zinc-400 hover:text-white"
+                  }`}
+                >
+                  Crops ({totalCropsAvail})
+                </button>
+              </div>
+
+              {/* Search & Weed Category Selector */}
+              <div className="space-y-1.5 text-[10px] font-mono">
+                <div className="relative">
+                  <Search className="size-3 text-zinc-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={paletteSearch}
+                    onChange={(e) => {
+                      setPaletteSearch(e.target.value);
+                      setPalettePage(1);
+                    }}
+                    placeholder="Search weed ID or type..."
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-lg pl-7 pr-2 py-1 text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+
+                <div className="flex flex-wrap gap-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPaletteCategory("all");
+                      setPalettePage(1);
+                    }}
+                    className={`px-1.5 py-0.5 rounded border text-[9px] ${
+                      paletteCategory === "all"
+                        ? "bg-emerald-500/20 border-emerald-400 text-emerald-300 font-bold"
+                        : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    All Types
+                  </button>
+                  {availableCategories.map((cat) => (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => {
+                        setPaletteCategory(cat);
+                        setPalettePage(1);
+                      }}
+                      className={`px-1.5 py-0.5 rounded border text-[9px] ${
+                        paletteCategory.toLowerCase() === cat.toLowerCase()
+                          ? "bg-sky-500/20 border-sky-400 text-sky-300 font-bold"
+                          : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-zinc-200"
+                      }`}
+                    >
+                      {cat}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Draggable Plant Cards Grid */}
+              <div className="max-h-72 overflow-y-auto pr-1 grid grid-cols-2 gap-1.5">
+                {displayedPalette.map((item) => {
                   const isWeed = item.type === "weed";
-                  const isArmed = armedTemplate === item.key;
+                  const isArmed = armedTemplate?.key === item.key;
 
                   return (
                     <div
@@ -1021,13 +1303,15 @@ export function VirtualEnvironmentPage({
                           return;
                         }
                         e.dataTransfer.setData("application/x-agri-plant", item.key);
+                        e.dataTransfer.setData("application/x-agri-plant-json", JSON.stringify(item));
                         e.dataTransfer.effectAllowed = "copy";
                       }}
                       onClick={() => {
                         if (isRunning) return;
-                        setArmedTemplate((prev) => (prev === item.key ? null : item.key));
+                        setArmedTemplate((prev) => (prev?.key === item.key ? null : item));
                       }}
-                      className={`flex items-center gap-2.5 p-2 rounded-xl border transition-all select-none ${
+                      title={`${item.label} (${item.category})`}
+                      className={`flex flex-col gap-1 p-1.5 rounded-lg border transition-all select-none ${
                         isRunning
                           ? "opacity-50 cursor-not-allowed border-zinc-800 bg-zinc-900/40"
                           : isArmed
@@ -1035,34 +1319,85 @@ export function VirtualEnvironmentPage({
                           : "border-zinc-800 bg-zinc-900/60 hover:border-zinc-600 cursor-grab active:cursor-grabbing"
                       }`}
                     >
-                      <img
-                        src={item.sampleImage}
-                        alt={item.label}
-                        draggable={false}
-                        className={`w-10 h-10 rounded-lg object-cover border shrink-0 ${
-                          isWeed ? "border-rose-500/60" : "border-emerald-500/60"
-                        }`}
-                      />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center justify-between gap-1">
-                          <span className="text-xs font-semibold text-zinc-100 truncate">
-                            {item.label}
-                          </span>
-                          <span
-                            className={`text-[9px] font-mono font-bold px-1.5 py-0.2 rounded ${
-                              isWeed
-                                ? "bg-rose-500/20 text-rose-400"
-                                : "bg-emerald-500/20 text-emerald-400"
-                            }`}
-                          >
-                            {item.badge}
-                          </span>
-                        </div>
-                        <p className="text-[10px] text-zinc-400 truncate">{item.description}</p>
+                      <div className="relative aspect-square w-full rounded overflow-hidden border border-zinc-800">
+                        <img
+                          src={item.sampleImage}
+                          alt={item.label}
+                          loading="lazy"
+                          draggable={false}
+                          className="w-full h-full object-cover"
+                        />
+                        <span
+                          className={`absolute top-1 right-1 text-[8px] font-mono font-bold px-1 rounded ${
+                            isWeed
+                              ? "bg-rose-600/90 text-white"
+                              : "bg-emerald-600/90 text-white"
+                          }`}
+                        >
+                          {item.badge}
+                        </span>
+                      </div>
+                      <div className="text-[10px] font-semibold text-zinc-100 truncate leading-tight">
+                        {item.label}
+                      </div>
+                      <div className="text-[8px] font-mono text-zinc-400 truncate leading-tight">
+                        {item.category || item.description}
                       </div>
                     </div>
                   );
                 })}
+              </div>
+
+              {/* Pagination (when browsing all 1,298 dataset plants) + Upload Custom Weed */}
+              <div className="flex items-center justify-between gap-2 text-[10px] font-mono pt-1">
+                {totalPages > 1 ? (
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="outline"
+                      size="icon-xs"
+                      disabled={palettePage <= 1}
+                      onClick={() => setPalettePage((p) => Math.max(1, p - 1))}
+                      className="border-zinc-700 text-zinc-300"
+                    >
+                      <ChevronLeft className="size-3" />
+                    </Button>
+                    <span className="text-zinc-400 px-1">
+                      {palettePage}/{totalPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="icon-xs"
+                      disabled={palettePage >= totalPages}
+                      onClick={() => setPalettePage((p) => Math.min(totalPages, p + 1))}
+                      className="border-zinc-700 text-zinc-300"
+                    >
+                      <ChevronRight className="size-3" />
+                    </Button>
+                  </div>
+                ) : (
+                  <span className="text-[9px] text-zinc-500">
+                    {isCatalogActive ? "Full Dataset Live" : "24 Offline Samples"}
+                  </span>
+                )}
+
+                <input
+                  ref={customPlantInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) => handleAddCustomPalettePhoto(e, paletteType === "crop" ? "crop" : "weed")}
+                  className="hidden"
+                />
+                <Button
+                  variant="outline"
+                  size="xs"
+                  disabled={isRunning}
+                  onClick={() => customPlantInputRef.current?.click()}
+                  className="border-zinc-700 text-zinc-300 h-6"
+                  title="Upload your own weed or crop image to drag onto the path"
+                >
+                  <Upload className="size-3" />
+                  <span>+ Custom</span>
+                </Button>
               </div>
 
               {/* Field Quick-Action Buttons */}
@@ -1086,7 +1421,7 @@ export function VirtualEnvironmentPage({
                   disabled={isRunning}
                   onClick={() => {
                     handleReset();
-                    setPlants(buildRandomField(trackLengthCm));
+                    setPlants(buildRandomField(trackLengthCm, displayedPalette));
                   }}
                   className="border-zinc-700 text-zinc-300 h-7"
                 >
@@ -1257,11 +1592,16 @@ export function VirtualEnvironmentPage({
             onCheckYolo={refreshYoloHealth}
             yoloConf={yoloConf}
             onChangeYoloConf={setYoloConf}
+            strictYoloOnly={strictYoloOnly}
+            onToggleStrictYolo={setStrictYoloOnly}
+            rawFrameUrl={rawFrameUrl}
             cameraFrameUrl={cameraFrameUrl}
             visionSource={visionSource}
             lastDetections={lastDetections}
             lastLatencyMs={lastLatencyMs}
+            lastYoloProof={lastYoloProof}
             activeZone={activeZone}
+            onTestCustomPhoto={handleTestCustomPhoto}
           />
 
           <Nozzle4DirHud

@@ -59,6 +59,46 @@ export async function detectFrameWithYolo(
 }
 
 /**
+ * Fetch paginated weed & crop varieties indexed from python/archive/agri_data/data.
+ */
+export async function fetchDatasetPlants(
+  baseUrl = DEFAULT_YOLO_SERVER_URL,
+  { type = "all", category = "all", search = "", page = 1, limit = 24 } = {}
+) {
+  const cleanBase = baseUrl.replace(/\/+$/, "");
+  const params = new URLSearchParams({
+    type,
+    category,
+    search,
+    page: String(page),
+    limit: String(limit),
+  });
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 2500);
+  try {
+    const res = await fetch(`${cleanBase}/dataset/plants?${params.toString()}`, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return {
+      ...data,
+      items: (data.items || []).map((item) => ({
+        ...item,
+        badge: item.type === "weed" ? "WEED" : "CROP",
+        sampleImage: `${cleanBase}/dataset/image/${encodeURIComponent(item.filename)}`,
+        description: `${item.category} • ${item.box_count} obj • ${item.area_pct}%`,
+      })),
+    };
+  } catch (err) {
+    clearTimeout(timeout);
+    throw err;
+  }
+}
+
+/**
  * Load an image URL into an HTMLImageElement (cached by caller).
  */
 export function loadImage(src) {
