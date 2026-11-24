@@ -64,9 +64,10 @@ export function VirtualEnvironmentPage({
   const [visualMode, setVisualMode] = useState("dataset"); // "dataset" | "schematic"
   const [speedMultiplier, setSpeedMultiplier] = useState(1);
 
-  // Real hardware sync (10 cm == 2000 ms / 2 sec conversion by default)
+  // Real hardware sync (10 cm == 2000 ms / 2 sec; N20 start->end == 10000 ms / 10 sec)
   const [mirrorRealBot, setMirrorRealBot] = useState(false);
   const [pulseMsPer10Cm, setPulseMsPer10Cm] = useState(2000);
+  const [n20FullSweepMs, setN20FullSweepMs] = useState(10000);
 
   // YOLO backend state
   const [yoloServerUrl, setYoloServerUrl] = useState(DEFAULT_YOLO_SERVER_URL);
@@ -114,6 +115,7 @@ export function VirtualEnvironmentPage({
   const speedRef = useRef(1);
   const mirrorRef = useRef(false);
   const pulseMsRef = useRef(2000);
+  const n20SweepRef = useRef(10000);
   const yoloUrlRef = useRef(yoloServerUrl);
   const yoloConfRef = useRef(yoloConf);
   const visualModeRef = useRef(visualMode);
@@ -132,6 +134,10 @@ export function VirtualEnvironmentPage({
   useEffect(() => {
     pulseMsRef.current = pulseMsPer10Cm;
   }, [pulseMsPer10Cm]);
+
+  useEffect(() => {
+    n20SweepRef.current = n20FullSweepMs;
+  }, [n20FullSweepMs]);
 
   useEffect(() => {
     yoloUrlRef.current = yoloServerUrl;
@@ -355,7 +361,10 @@ export function VirtualEnvironmentPage({
         targetNozzleCm: checkpointNozzleY,
         targetNozzleX: 0,
         longDurationMs: stepDurationMs,
-        latDurationMs: Math.abs(botPosRef.current.nozzleX) > 0.02 ? 250 : 0,
+        latDurationMs:
+          Math.abs(botPosRef.current.nozzleX) > 0.02
+            ? Math.round((Math.abs(botPosRef.current.nozzleX) / 2) * n20SweepRef.current)
+            : 0,
         longDir: "FORWARD",
         latDir:
           Math.abs(botPosRef.current.nozzleX) <= 0.02
@@ -521,14 +530,18 @@ export function VirtualEnvironmentPage({
           setN20State(latDir);
 
           // Maintain 10 cm == pulseMsRef.current (default 2000 ms => 200 ms/cm)
+          // and N20 start->end == n20SweepRef.current (default 10000 ms across span 2.0 => 5000 ms/unit)
           const longMs =
             longDir === "STOP" ? 0 : Math.max(80, Math.round((Math.abs(deltaCm) / 10) * pulseMsRef.current));
-          const latMs = latDir === "STOP" ? 0 : Math.max(120, Math.round(Math.abs(deltaX) * 650));
+          const latMs =
+            latDir === "STOP" ? 0 : Math.max(120, Math.round((Math.abs(deltaX) / 2) * n20SweepRef.current));
 
           appendLog(
             `Targeting weed @ ${weed.positionCm.toFixed(1)} cm (X=${Math.round(
               weed.lateralOffset * 100
-            )}%): Rover ${longDir} (${(longMs / 1000).toFixed(2)}s) + N20 ${latDir}`,
+            )}%): Rover ${longDir} (${(longMs / 1000).toFixed(2)}s) + N20 ${latDir} (${(
+              latMs / 1000
+            ).toFixed(2)}s)`,
             "target"
           );
 
@@ -602,7 +615,9 @@ export function VirtualEnvironmentPage({
               ? 0
               : Math.max(80, Math.round((Math.abs(zoneEnd - curAfter.botCm) / 10) * pulseMsRef.current));
           const realignLatMs =
-            realignN20 === "STOP" ? 0 : Math.max(120, Math.round(Math.abs(curAfter.nozzleX) * 650));
+            realignN20 === "STOP"
+              ? 0
+              : Math.max(120, Math.round((Math.abs(curAfter.nozzleX) / 2) * n20SweepRef.current));
 
           await animateDualAxis({
             targetBotCm: zoneEnd,
@@ -1173,6 +1188,34 @@ export function VirtualEnvironmentPage({
                       Reset 2.0s
                     </button>
                   )}
+                </div>
+
+                <div className="pt-2 border-t border-zinc-800/80 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sky-400 font-bold">N20 START → END TIME</span>
+                    <span className="text-zinc-200">
+                      {(n20FullSweepMs / 1000).toFixed(1)} s
+                    </span>
+                  </div>
+                  <Slider
+                    value={n20FullSweepMs}
+                    min={2000}
+                    max={15000}
+                    step={500}
+                    onChange={setN20FullSweepMs}
+                  />
+                  <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-400">
+                    <span>Full Left ↔ Right rail sweep = 10.0 sec.</span>
+                    {n20FullSweepMs !== 10000 && (
+                      <button
+                        type="button"
+                        onClick={() => setN20FullSweepMs(10000)}
+                        className="px-1.5 py-0.5 rounded bg-sky-500/15 border border-sky-500/30 text-sky-300 shrink-0"
+                      >
+                        Reset 10.0s
+                      </button>
+                    )}
+                  </div>
                 </div>
               </CardContent>
             </Card>
