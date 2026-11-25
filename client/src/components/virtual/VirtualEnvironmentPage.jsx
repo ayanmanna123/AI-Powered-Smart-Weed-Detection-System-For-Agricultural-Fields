@@ -724,7 +724,52 @@ export function VirtualEnvironmentPage({
     ]
   );
 
-  // Full autonomous run from currentZoneIndex -> end of path
+  // Reverse bot from final position back down to 0 cm start pad
+  const returnBotToStart = useCallback(
+    async (activeRunId) => {
+      const cur = botPosRef.current;
+      if (cur.botCm <= 0.1 && Math.abs(cur.nozzleX) <= 0.02) {
+        updateBotPose(0, 0, 0);
+        return;
+      }
+
+      const returnCm = Math.max(0, cur.botCm);
+      const returnMs = Math.max(120, Math.round((returnCm / SECTION_CM) * pulseMsRef.current));
+      const latDir =
+        Math.abs(cur.nozzleX) <= 0.02 ? "STOP" : cur.nozzleX > 0 ? "LEFT" : "RIGHT";
+      const latMs =
+        latDir === "STOP"
+          ? 0
+          : Math.max(120, Math.round((Math.abs(cur.nozzleX) / 2) * n20SweepRef.current));
+
+      setActiveZone(null);
+      setPhase("RETURNING");
+      setDriveState("REVERSE");
+      setN20State(latDir);
+      appendLog(
+        `Reached end (${returnCm.toFixed(1)} cm) — Reversing back to 0 cm start pad (${(
+          returnMs / 1000
+        ).toFixed(2)}s)...`,
+        "move"
+      );
+
+      await animateDualAxis({
+        targetBotCm: 0,
+        targetNozzleCm: 0,
+        targetNozzleX: 0,
+        longDurationMs: returnMs,
+        latDurationMs: latMs,
+        longDir: returnCm > 0.1 ? "REVERSE" : "STOP",
+        latDir,
+        activeRunId,
+      });
+
+      stopHardwareActuators();
+    },
+    [animateDualAxis, appendLog, stopHardwareActuators, updateBotPose]
+  );
+
+  // Full autonomous run from currentZoneIndex -> end of path -> reverse back to 0 cm
   const handleRunMission = async () => {
     if (isRunning && isPaused) {
       pausedRef.current = false;
@@ -765,10 +810,14 @@ export function VirtualEnvironmentPage({
       }
 
       if (runIdRef.current === activeRunId) {
+        await returnBotToStart(activeRunId);
+      }
+
+      if (runIdRef.current === activeRunId) {
         setPhase("COMPLETE");
-        setCurrentZoneIndex(totalZones);
+        setCurrentZoneIndex(0);
         stopHardwareActuators();
-        appendLog("Mission complete! Entire straight path scanned & treated.", "success");
+        appendLog("Mission complete! Bot returned to 0 cm start position.", "success");
       }
     } catch (err) {
       if (err.message !== "ABORTED") {
@@ -814,8 +863,17 @@ export function VirtualEnvironmentPage({
       await executeSingleZone(zoneIdx, activeRunId);
       if (runIdRef.current === activeRunId) {
         const nextIdx = zoneIdx + 1;
-        setCurrentZoneIndex(nextIdx);
-        setPhase(nextIdx >= totalZones ? "COMPLETE" : "PAUSED");
+        if (nextIdx >= totalZones) {
+          await returnBotToStart(activeRunId);
+          if (runIdRef.current === activeRunId) {
+            setCurrentZoneIndex(0);
+            setPhase("COMPLETE");
+            appendLog("Mission complete! Bot returned to 0 cm start position.", "success");
+          }
+        } else {
+          setCurrentZoneIndex(nextIdx);
+          setPhase("PAUSED");
+        }
       }
     } catch (err) {
       if (err.message !== "ABORTED") {

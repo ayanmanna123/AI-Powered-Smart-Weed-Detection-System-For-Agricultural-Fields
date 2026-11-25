@@ -458,7 +458,7 @@ export function VirtualFieldTrack({
           })}
 
           {/* 30 cm AI Camera Scan Frame around Nozzle Bay */}
-          {phase !== "IDLE" && (activeZone || botCm > 0) && (
+          {phase !== "IDLE" && phase !== "RETURNING" && (activeZone || botCm > 0) && (
             <div
               style={{
                 bottom: `${cmToBottomPct(
