@@ -391,43 +391,39 @@ export function VirtualEnvironmentPage({
       setActiveZone({ startCm: zoneStart, endCm: zoneEnd });
 
       // ------------------------------------------------------------------
-      // STEP 1: Move 30 cm Forward along the single-line path
-      // Maintain exact conversion: 30 cm == pulseMsRef.current (default 1132 ms => 10 cm = 377 ms)
+      // STEP 1: Advance smoothly forward into next 30 cm section directly
+      // from current position (never wasted-realigning to midpoints).
       // ------------------------------------------------------------------
+      const curPos = botPosRef.current;
+      const forwardCm = Math.max(0, checkpointNozzleY - curPos.nozzleCm);
+      const targetBotCm = curPos.botCm + (zoneIdx === 0 ? zoneEnd - curPos.botCm : forwardCm);
+      const physicalAdvanceCm = Math.max(0.5, targetBotCm - curPos.botCm);
+      const stepDurationMs = Math.round((physicalAdvanceCm / SECTION_CM) * pulseMsRef.current);
+
       setPhase("MOVE_30CM");
       setDriveState("FORWARD");
       setN20State("STOP");
-      const stepCm = Math.max(0.5, zoneEnd - botPosRef.current.botCm);
-      const stepDurationMs = Math.round((stepCm / SECTION_CM) * pulseMsRef.current);
       appendLog(
-        `Moving ${stepCm.toFixed(1)} cm forward (${zoneStart} -> ${zoneEnd} cm | ${(
+        `Advancing ${physicalAdvanceCm.toFixed(1)} cm forward -> Section ${zoneStart}-${zoneEnd} cm (${(
           stepDurationMs / 1000
         ).toFixed(2)}s)...`,
         "move"
       );
 
       await animateDualAxis({
-        targetBotCm: zoneEnd,
+        targetBotCm,
         targetNozzleCm: checkpointNozzleY,
-        targetNozzleX: 0,
+        targetNozzleX: curPos.nozzleX,
         longDurationMs: stepDurationMs,
-        latDurationMs:
-          Math.abs(botPosRef.current.nozzleX) > 0.02
-            ? Math.round((Math.abs(botPosRef.current.nozzleX) / 2) * n20SweepRef.current)
-            : 0,
+        latDurationMs: 0,
         longDir: "FORWARD",
-        latDir:
-          Math.abs(botPosRef.current.nozzleX) <= 0.02
-            ? "STOP"
-            : botPosRef.current.nozzleX > 0
-            ? "LEFT"
-            : "RIGHT",
+        latDir: "STOP",
         activeRunId,
       });
 
       setStats((s) => ({
         ...s,
-        distanceCm: Number(zoneEnd.toFixed(1)),
+        distanceCm: Math.max(s.distanceCm, Number(zoneEnd.toFixed(1))),
       }));
 
       // ------------------------------------------------------------------
@@ -598,7 +594,7 @@ export function VirtualEnvironmentPage({
           const deltaX = weed.lateralOffset - cur.nozzleX;
 
           const longDir =
-            Math.abs(deltaCm) < 0.25 ? "STOP" : deltaCm > 0 ? "FORWARD" : "REVERSE";
+            Math.abs(deltaCm) < 0.4 ? "STOP" : deltaCm > 0 ? "FORWARD" : "REVERSE";
           const latDir =
             Math.abs(deltaX) < 0.04 ? "STOP" : deltaX < 0 ? "LEFT" : "RIGHT";
 
@@ -624,11 +620,14 @@ export function VirtualEnvironmentPage({
             "target"
           );
 
-          const targetBot = cur.botCm + deltaCm;
+          const targetBot = longDir === "STOP" ? cur.botCm : cur.botCm + deltaCm;
+          const targetNozzleY = longDir === "STOP" ? cur.nozzleCm : weed.positionCm;
+          const targetNozzleX = latDir === "STOP" ? cur.nozzleX : weed.lateralOffset;
+
           await animateDualAxis({
             targetBotCm: targetBot,
-            targetNozzleCm: weed.positionCm,
-            targetNozzleX: weed.lateralOffset,
+            targetNozzleCm: targetNozzleY,
+            targetNozzleX,
             longDurationMs: longMs,
             latDurationMs: latMs,
             longDir,
@@ -666,53 +665,8 @@ export function VirtualEnvironmentPage({
             herbicideMl: Number((s.herbicideMl + 4.5).toFixed(1)),
           }));
         }
-
-        // ----------------------------------------------------------------
-        // STEP 4: Re-align Rover to 10 cm Checkpoint & Center N20 Nozzle
-        // ----------------------------------------------------------------
-        const curAfter = botPosRef.current;
-        if (Math.abs(curAfter.botCm - zoneEnd) > 0.2 || Math.abs(curAfter.nozzleX) > 0.03) {
-          setPhase("REALIGN");
-          const realignDrive =
-            Math.abs(zoneEnd - curAfter.botCm) < 0.2
-              ? "STOP"
-              : zoneEnd > curAfter.botCm
-              ? "FORWARD"
-              : "REVERSE";
-          const realignN20 =
-            Math.abs(curAfter.nozzleX) < 0.03
-              ? "STOP"
-              : curAfter.nozzleX > 0
-              ? "LEFT"
-              : "RIGHT";
-
-          setDriveState(realignDrive);
-          setN20State(realignN20);
-
-          const realignLongMs =
-            realignDrive === "STOP"
-              ? 0
-              : Math.max(
-                  40,
-                  Math.round((Math.abs(zoneEnd - curAfter.botCm) / SECTION_CM) * pulseMsRef.current)
-                );
-          const realignLatMs =
-            realignN20 === "STOP"
-              ? 0
-              : Math.max(120, Math.round((Math.abs(curAfter.nozzleX) / 2) * n20SweepRef.current));
-
-          await animateDualAxis({
-            targetBotCm: zoneEnd,
-            targetNozzleCm: checkpointNozzleY,
-            targetNozzleX: 0,
-            longDurationMs: realignLongMs,
-            latDurationMs: realignLatMs,
-            longDir: realignDrive,
-            latDir: realignN20,
-            activeRunId,
-          });
-          stopHardwareActuators();
-        }
+        // Stay at the last sprayed coordinate so the next section advances
+        // strictly forward without wasted reverse-to-midpoint oscillation.
       }
     },
     [
