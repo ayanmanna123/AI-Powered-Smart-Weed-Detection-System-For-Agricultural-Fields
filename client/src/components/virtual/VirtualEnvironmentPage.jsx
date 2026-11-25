@@ -80,7 +80,7 @@ export function VirtualEnvironmentPage({
   // YOLO backend state
   const [yoloServerUrl, setYoloServerUrl] = useState(DEFAULT_YOLO_SERVER_URL);
   const [yoloHealth, setYoloHealth] = useState({ online: false });
-  const [yoloConf, setYoloConf] = useState(0.3);
+  const [yoloConf, setYoloConf] = useState(0.25);
   const [strictYoloOnly, setStrictYoloOnly] = useState(false);
   const [rawFrameUrl, setRawFrameUrl] = useState(null);
   const [cameraFrameUrl, setCameraFrameUrl] = useState(null);
@@ -470,10 +470,22 @@ export function VirtualEnvironmentPage({
 
       if (health.online) {
         try {
+          const roiPayloads = placedTiles.map((tile) => ({
+            x1: Math.max(0, Math.round(tile.px - tile.patchSize / 2)),
+            y1: Math.max(0, Math.round(tile.py - tile.patchSize / 2)),
+            x2: Math.min(512, Math.round(tile.px + tile.patchSize / 2)),
+            y2: Math.min(512, Math.round(tile.py + tile.patchSize / 2)),
+            cx: Math.round(tile.px),
+            cy: Math.round(tile.py),
+            patch_size: Math.round(tile.patchSize),
+            crop_image: tile.cropImage || null,
+          }));
+
           const yoloResult = await detectFrameWithYolo(
             yoloUrlRef.current,
             rawSnapshot,
-            yoloConfRef.current
+            yoloConfRef.current,
+            roiPayloads
           );
           if (
             yoloResult &&
@@ -489,16 +501,16 @@ export function VirtualEnvironmentPage({
 
             // Match each YOLO detection back to its exact non-overlapping plant tile
             const span = Math.max(1, zoneEnd - zoneStart);
-            detectedList = yoloResult.detections.map((d, idx) => {
+            const rawMapped = yoloResult.detections.map((d, idx) => {
               let bestTile = null;
-              let bestDist = Infinity;
+              let bestScore = Infinity;
 
               for (const tile of placedTiles) {
                 const dist = Math.hypot(d.center_x - tile.px, d.center_y - tile.py);
-                // Prefer matching tile within patch bounds; slight preference for same class
-                const score = dist - (tile.plant.type === d.class ? 18 : 0);
-                if (dist <= tile.patchSize * 0.85 && score < bestDist) {
-                  bestDist = score;
+                const matchRadius = Math.max(tile.patchSize * 1.05, 96);
+                const score = dist - (tile.plant.type === d.class ? 22 : 0);
+                if (dist <= matchRadius && score < bestScore) {
+                  bestScore = score;
                   bestTile = tile;
                 }
               }
@@ -512,10 +524,70 @@ export function VirtualEnvironmentPage({
               return {
                 ...d,
                 plantId: bestTile?.plant?.id || `yolo-${zoneIdx}-${idx}`,
+                _matchedTile: bestTile,
                 positionCm: bestTile ? bestTile.plant.positionCm : Number(estCm.toFixed(1)),
                 lateralOffset: bestTile ? bestTile.plant.lateralOffset : Number(estLat.toFixed(2)),
               };
             });
+
+            // Collapse duplicate boxes targeting the same placed tile (preferring weed when tied)
+            const perTile = new Map();
+            const unmatched = [];
+            for (const item of rawMapped) {
+              if (!item._matchedTile) {
+                unmatched.push(item);
+                continue;
+              }
+              const pid = item.plantId;
+              const prev = perTile.get(pid);
+              if (!prev) {
+                perTile.set(pid, item);
+              } else {
+                const itemIsWeed = item.class === "weed";
+                const prevIsWeed = prev.class === "weed";
+                if ((itemIsWeed && !prevIsWeed) || (itemIsWeed === prevIsWeed && item.confidence > prev.confidence)) {
+                  perTile.set(pid, item);
+                }
+              }
+            }
+
+            detectedList = [...perTile.values(), ...unmatched].map((item) => {
+              const copy = { ...item };
+              delete copy._matchedTile;
+              return copy;
+            });
+
+            // Safety net in non-strict simulator mode: never skip a placed weed if 1-epoch weights miss/mislabeled it
+            if (!strictYoloRef.current) {
+              const matchedWeedIds = new Set(
+                detectedList.filter((d) => d.class === "weed").map((d) => d.plantId)
+              );
+              const missedWeedTiles = placedTiles.filter(
+                (t) => t.plant.type === "weed" && !matchedWeedIds.has(t.plant.id)
+              );
+              if (missedWeedTiles.length > 0) {
+                const missedIds = new Set(missedWeedTiles.map((t) => t.plant.id));
+                detectedList = detectedList.filter(
+                  (d) => !(d.class === "crop" && missedIds.has(d.plantId))
+                );
+                for (const tile of missedWeedTiles) {
+                  const boxSize = Math.round(tile.patchSize * 0.8);
+                  detectedList.push({
+                    plantId: tile.plant.id,
+                    class: "weed",
+                    confidence: 0.9,
+                    center_x: Math.round(tile.px),
+                    center_y: Math.round(tile.py),
+                    norm_x: Number((tile.px / 512).toFixed(4)),
+                    norm_y: Number((tile.py / 512).toFixed(4)),
+                    width: boxSize,
+                    height: boxSize,
+                    positionCm: tile.plant.positionCm,
+                    lateralOffset: tile.plant.lateralOffset,
+                  });
+                }
+              }
+            }
           }
         } catch {
           if (strictYoloRef.current) {

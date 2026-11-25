@@ -31,20 +31,26 @@ export async function checkYoloHealth(baseUrl = DEFAULT_YOLO_SERVER_URL) {
 }
 
 /**
- * Send a base64 camera snapshot to YOLOv8 /detect.
+ * Send a base64 camera snapshot (plus optional per-tile ROI crops) to YOLOv8 /detect.
  */
 export async function detectFrameWithYolo(
   baseUrl = DEFAULT_YOLO_SERVER_URL,
   imageBase64,
-  conf = 0.3
+  conf = 0.25,
+  rois = null
 ) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
+  const timeoutMs = Array.isArray(rois) && rois.length > 0 ? 15000 : 10000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
+    const payload = { image: imageBase64, conf };
+    if (Array.isArray(rois) && rois.length > 0) {
+      payload.rois = rois;
+    }
     const res = await fetch(`${baseUrl.replace(/\/+$/, "")}/detect`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image: imageBase64, conf }),
+      body: JSON.stringify(payload),
       signal: controller.signal,
     });
     clearTimeout(timeout);
@@ -119,10 +125,10 @@ function resolveNonOverlappingTiles(plants, zoneStartCm, zoneEndCm, frameSize = 
   if (!plants || plants.length === 0) return [];
 
   const count = plants.length;
-  const patchSize = count === 1 ? 180 : count === 2 ? 156 : count <= 4 ? 132 : 108;
-  const gap = 14;
+  const patchSize = count === 1 ? 260 : count === 2 ? 200 : count <= 4 ? 168 : 132;
+  const gap = 10;
   const minSep = patchSize + gap;
-  const margin = patchSize / 2 + 12;
+  const margin = patchSize / 2 + 8;
   const spanCm = Math.max(1, zoneEndCm - zoneStartCm);
 
   const items = plants.map((plant) => {
@@ -240,30 +246,23 @@ export async function renderZoneCameraSnapshot({
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, SIZE, SIZE);
 
-  // Subtle soil granules & furrow lines
-  for (let i = 0; i < 220; i++) {
+  // Subtle soil granules (keep background clean so YOLOv8 focuses on plant foliage)
+  for (let i = 0; i < 160; i++) {
     const gx = (i * 73) % SIZE;
     const gy = (i * 137) % SIZE;
-    ctx.fillStyle = i % 2 === 0 ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.16)";
+    ctx.fillStyle = i % 2 === 0 ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.12)";
     ctx.fillRect(gx, gy, 3, 3);
-  }
-
-  ctx.strokeStyle = "rgba(16, 185, 129, 0.14)";
-  ctx.lineWidth = 1;
-  for (let p = 64; p < SIZE; p += 64) {
-    ctx.beginPath();
-    ctx.moveTo(p, 0);
-    ctx.lineTo(p, SIZE);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(0, p);
-    ctx.lineTo(SIZE, p);
-    ctx.stroke();
   }
 
   const placedTiles = resolveNonOverlappingTiles(plants, zoneStartCm, zoneEndCm, SIZE);
 
-  // Draw every plant in the current 10 cm zone without overlap
+  // Reusable scratch canvas for full-resolution ROI crops sent to YOLOv8 when needed
+  const roiCanvas = document.createElement("canvas");
+  roiCanvas.width = 512;
+  roiCanvas.height = 512;
+  const roiCtx = roiCanvas.getContext("2d");
+
+  // Draw every plant in the current zone without overlap or border artifacts
   for (const tile of placedTiles) {
     const { plant, px, py, patchSize } = tile;
 
@@ -280,14 +279,19 @@ export async function renderZoneCameraSnapshot({
       if (img) {
         ctx.save();
         ctx.beginPath();
-        ctx.roundRect(px - patchSize / 2, py - patchSize / 2, patchSize, patchSize, 12);
+        ctx.roundRect(px - patchSize / 2, py - patchSize / 2, patchSize, patchSize, 8);
         ctx.clip();
         ctx.drawImage(img, px - patchSize / 2, py - patchSize / 2, patchSize, patchSize);
         ctx.restore();
 
-        ctx.strokeStyle = plant.type === "weed" ? "rgba(244,63,94,0.35)" : "rgba(16,185,129,0.35)";
-        ctx.lineWidth = 2;
-        ctx.strokeRect(px - patchSize / 2, py - patchSize / 2, patchSize, patchSize);
+        // Capture full 512x512 native tile crop so YOLO best.pt can re-check tiny/hard weeds cleanly
+        try {
+          roiCtx.clearRect(0, 0, 512, 512);
+          roiCtx.drawImage(img, 0, 0, 512, 512);
+          tile.cropImage = roiCanvas.toDataURL("image/jpeg", 0.9);
+        } catch {
+          tile.cropImage = null;
+        }
         continue;
       }
     }
@@ -304,7 +308,7 @@ export async function renderZoneCameraSnapshot({
   ctx.fillText(`SCAN BAY: ${zoneStartCm.toFixed(0)}-${zoneEndCm.toFixed(0)} cm`, 16, SIZE - 17);
 
   return {
-    dataUrl: canvas.toDataURL("image/jpeg", 0.88),
+    dataUrl: canvas.toDataURL("image/jpeg", 0.9),
     placedTiles,
   };
 }

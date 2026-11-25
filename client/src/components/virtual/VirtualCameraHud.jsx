@@ -316,7 +316,7 @@ export function VirtualCameraHud({
             <div className="w-32">
               <Slider
                 value={Math.round(yoloConf * 100)}
-                min={15}
+                min={10}
                 max={85}
                 step={5}
                 onChange={(v) => onChangeYoloConf(v / 100)}
